@@ -24,6 +24,7 @@ pub struct AudioFrame {
 // server to client
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {
+    Handshake(String),
     PlaybackState(PlaybackState),
     AudioFrame(AudioFrame),
 }
@@ -31,6 +32,7 @@ pub enum Message {
 // client to server
 #[derive(Serialize, Deserialize)]
 pub enum Command {
+    Handshake(String),
     Test(String),
     AudioFrame(AudioFrame),
 }

@@ -93,10 +93,48 @@ async fn handle_connection(
 ) -> Result<(), Box<dyn Error>> {
     let frames = Framed::new(stream, LengthDelimitedCodec::new());
 
-    // TODO: handshake
+    let mut peer = Peer::new(state.clone(), frames).await?;
+
+    tokio::select! {
+        result = peer.frames.next() => match result {
+            Some(Ok(bytes)) => {
+                if let Ok(msg) = bincode::deserialize::<Message>(&bytes) {
+                    if let Message::Handshake(hs) = msg {
+                        println!("* {} - handshake: {:x?} ('{}')", addr, hs.as_bytes(), hs);
+                        // pretend it's a version number or something useful
+                        if hs == "meow" {
+                            // now reply
+                            let hsr = bincode::serialize(&Message::Handshake("nyaa".to_string())).unwrap();
+                            let bytes = bytes::Bytes::from(hsr);
+                            peer.frames.send(bytes).await?;
+                        } else {
+                            println!("* {} - invalid handshake", addr);
+                        }
+                        
+                    }
+                } else {
+                    println!("* {} - invalid handshake", addr);
+                    // TODO: do something
+                }
+            },
+            Some(Err(e)) => {
+                println!("* {} - err: {}", addr, e);
+                // TODO: do something
+            },
+            None => {
+                println!("* {} - socket disconnected", addr);
+                {
+                    let mut state = state.lock().await;
+                    state.peers.remove(&addr);
+            
+                }
+                return Ok(())
+            }
+
+        }
+    }
 
     // register peer
-    let mut peer = Peer::new(state.clone(), frames).await?;
 
     // TODO: broadcast connected message
     // {
@@ -123,6 +161,7 @@ async fn handle_connection(
 
                     let msg: Message = bincode::deserialize(&bytes).expect("failed to deserialize message");
                     state.broadcast(addr, &msg).await;
+                    println!("* {} - {:?}", addr, &msg);
                 }
 
                 Some(Err(e)) => {
@@ -145,20 +184,5 @@ async fn handle_connection(
 
     Ok(())
 
-    // let mut buf = vec![0; 1024];
-    // loop {
-    //     let n = stream
-    //         .read(&mut buf)
-    //         .await
-    //         .expect("failed to read data from socket");
-
-    //     if n == 0 {
-    //         return;
-    //     }
-
-    //     socket
-    //         .write_all(&buf[0..n])
-    //         .await
-    //         .expect("failed to write data to socket")
-    // }
 }
+

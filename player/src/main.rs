@@ -2,6 +2,7 @@ use futures::{SinkExt, StreamExt};
 use protocol::{Message, PlaybackState, PlayingState};
 use tokio::net::TcpStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio::time::timeout;
 
 use std::io::{Read, Write};
 
@@ -13,13 +14,42 @@ async fn main() -> std::io::Result<()> {
 
     let mut frames = Framed::new(stream, LengthDelimitedCodec::new());
 
+    /* 
     let message = Message::PlaybackState(PlaybackState {
         state: PlayingState::Playing,
     });
 
     let encoded = bincode::serialize(&message).expect("failed to serialize message");
     let bytes = bytes::Bytes::from(encoded);
-    frames.send(bytes).await?;
+    frames.send(bytes).await?; */
+
+    // handshake
+    let hs = serialize_message(&Message::Handshake("meow".to_string())).unwrap();
+    frames.send(hs).await?;
+
+    let hs_timeout = std::time::Duration::from_millis(1000);
+    if let Ok(hsr) = timeout(hs_timeout, frames.next()).await {
+        match hsr {
+            Some(Ok(r)) => {
+                let response: Message = bincode::deserialize(&r).unwrap();
+                if let Message::Handshake(r) = response {
+                    if r != "nyaa" {
+                        return Ok(()); // not okay
+                    }
+                }
+            },
+            Some(Err(_)) |
+            None => {
+                eprintln!("handshake failed");
+                return Ok(());
+            }
+        }
+    } else {
+        eprintln!("timed out waiting for handshake");
+        return Ok(());
+    };
+
+    // handshake okay
 
     loop {
         let result = frames.next().await;
@@ -71,4 +101,10 @@ async fn main() -> std::io::Result<()> {
     // // so we need to keep the main thread alive while it's playing.
     // // Press ctrl + C to stop the process once you're done.
     // loop {}
+}
+
+
+fn serialize_message(m: &Message) -> Result<bytes::Bytes, bincode::Error> {
+    let s = bincode::serialize(m)?;
+    Ok(bytes::Bytes::from(s))
 }
