@@ -1,0 +1,13 @@
+[package]
+name = "server"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tokio = { version = "1.28.1", features = ["macros", "net", "rt-multi-thread", "io-util", "sync"] }
+protocol = { path = "../protocol" }
+tokio-util = { version = "0.7.8", features = ["codec"] }
+futures = "0.3.28"
+bincode = "1.3.3"
+bytes = "1.4.0"

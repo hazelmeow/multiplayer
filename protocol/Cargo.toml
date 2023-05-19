@@ -1,0 +1,9 @@
+[package]
+name = "protocol"
+publish = false
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1.0.163", features = ["derive"] }
+serde-big-array = "0.5.1"
