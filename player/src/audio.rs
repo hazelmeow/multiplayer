@@ -1,10 +1,11 @@
-use std::sync::Arc;
+use std::mem::MaybeUninit;
+use std::sync::{Arc, Mutex};
 
 use opus::{Decoder, Encoder};
 use protocol::AudioFrame;
-use ringbuf::{HeapRb, Rb};
-use symphonia::core::audio::{SampleBuffer};
-use symphonia::core::codecs::{DecoderOptions};
+use ringbuf::{LocalRb, Rb};
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -12,8 +13,9 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Data, PlayStreamError, Sample, SampleFormat};
-use rubato::{Resampler, FftFixedIn};
+use cpal::{Data, PlayStreamError, Sample, SampleFormat, Stream};
+use rubato::{FftFixedIn, Resampler};
+
 pub struct Track {
     pub samples: Arc<Vec<f32>>,
     pub sample_rate: u32,
@@ -80,10 +82,10 @@ impl Track {
 
                         samples.copy_interleaved_ref(decoded);
                         for frame in samples.samples().chunks(spec.channels.count()) {
-							for (chan, sample) in frame.iter().enumerate() {
-								song_samples[chan].push(*sample)
-							}
-						}
+                            for (chan, sample) in frame.iter().enumerate() {
+                                song_samples[chan].push(*sample)
+                            }
+                        }
                     } else {
                         eprintln!("Empty packet encountered while loading song!");
                     }
@@ -95,23 +97,20 @@ impl Track {
 
         // resample to standard 48000 if needed
         let samples_correct_rate = if sample_rate != 48000 {
-
             let l = samples_not_interleaved.as_ref().unwrap()[0].len().clone();
-            let mut resampler = FftFixedIn::<f32>::new(
-                sample_rate as usize,
-                48000,
-                l,
-                100,
-                2
-            ).unwrap();
+            let mut resampler =
+                FftFixedIn::<f32>::new(sample_rate as usize, 48000, l, 100, 2).unwrap();
 
-            resampler.process(&samples_not_interleaved.unwrap(), None).unwrap()
+            resampler
+                .process(&samples_not_interleaved.unwrap(), None)
+                .unwrap()
         } else {
             samples_not_interleaved.unwrap()
         };
 
         // now we have to interleave it since we had to use the resampling thing
-        let samples: Vec<f32> = samples_correct_rate[0].chunks(1)
+        let samples: Vec<f32> = samples_correct_rate[0]
+            .chunks(1)
             .zip(samples_correct_rate[1].chunks(1))
             .flat_map(|(a, b)| a.into_iter().chain(b))
             .copied()
@@ -121,7 +120,8 @@ impl Track {
         // but since we read like.. 2 samples at a time idk how
         // the way it is it's just too slow for anything realistically-sized
 
-        let mut encoder = opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+        let mut encoder =
+            opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
         //encoder.set_bitrate(opus::Bitrate::Bits(256)).unwrap();
         Ok(Self {
             samples: Arc::new(samples),
@@ -150,43 +150,32 @@ impl Track {
     }
 }
 
+type Ringbuf = LocalRb<f32, Vec<MaybeUninit<f32>>>;
+
 pub struct Player {
     decoder: Decoder,
-    buffer: HeapRb<Vec<u8>>,
+    buffer: Arc<Mutex<Ringbuf>>,
+    stream: Option<Stream>,
 }
 impl Player {
     pub fn new() -> Self {
         Self {
             decoder: Decoder::new(48000, opus::Channels::Stereo).unwrap(),
-            buffer:HeapRb::<Vec<u8>>::new(1000),
+            buffer: Arc::new(Mutex::new(Ringbuf::new(48000 * 10))), // 10s??
+            stream: None,
         }
-    }
-    pub fn receive(&mut self, data: Vec<u8>) {
-        self.buffer.push(data).unwrap();
-    }
-    pub fn decode_frame(&mut self) -> [f32; 960] {
-        let mut pcm = [0.0; 960];
-        let frame = self.buffer.pop().unwrap();
-        let x = self.decoder.decode_float(&frame, &mut pcm, false).unwrap();
-        pcm
     }
 
-    pub fn debug_export(&mut self) {
-        let spec = hound::WavSpec {
-            channels: 2,
-            sample_rate: 48000,
-            bits_per_sample: 32,
-            sample_format: hound::SampleFormat::Float,
-        };
-        let mut writer = hound::WavWriter::create("blah.wav", spec).unwrap();
-        loop {
-            let frame = self.decode_frame();
-            for s in frame {
-                writer.write_sample(s).unwrap();
-            }
-        }
+    // decode opus data when received and buffer the samples
+    pub fn receive(&mut self, frame: Vec<u8>) {
+        // allocate and decode into here
+        let mut pcm = vec![0.0; 960];
+        self.decoder.decode_float(&frame, &mut pcm, false).unwrap();
+
+        // copy to ringbuffer
+        self.buffer.lock().unwrap().push_slice(&pcm);
     }
-/* 
+
     pub fn play(&mut self) {
         println!("Initialising local audio...");
         let host = cpal::default_host();
@@ -200,25 +189,38 @@ impl Player {
         let supported_config = supported_configs_range
             .next()
             .expect("no supported config?!")
-            .with_max_sample_rate();
+            .with_sample_rate(cpal::SampleRate(48000));
+        // .with_max_sample_rate(); //???
 
         let err_fn = |err| eprintln!("an error occurred on the output audio stream: {}", err);
         let sample_format = supported_config.sample_format();
+        println!("sample format is {:?}", sample_format); //?? do we care about other sample formats
         let config = supported_config.into();
 
-        let stream = device.build_output_stream(
+        let buffer_handle = self.buffer.clone();
+
+        let stream = device
+            .build_output_stream(
                 &config,
-                move |data, info| Self::write_audio::<f32>(data, info, &self.buffer),
+                move |data, info| write_audio::<f32>(data, info, &buffer_handle),
                 err_fn,
-                None
-            ).unwrap();
+                None,
+            )
+            .unwrap();
 
-        println!("Starting audio stream");
         stream.play().unwrap();
-    }
+        println!("Starting audio stream");
 
-    fn write_audio<T: Sample>(data: &mut [f32], _: &cpal::OutputCallbackInfo, rb_audio: &HeapRb<Vec<u8>>) {
-        println!("Len {}", data.len());
-        // here you'd basically just 
-    } */
+        // dont let it be dropped
+        self.stream = Some(stream);
+    }
+}
+
+// callback when the audio output needs more data
+fn write_audio<T: Sample>(
+    out_data: &mut [f32],
+    _: &cpal::OutputCallbackInfo,
+    buffer: &Arc<Mutex<Ringbuf>>,
+) {
+    buffer.lock().unwrap().pop_slice(out_data);
 }

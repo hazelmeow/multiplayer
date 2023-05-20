@@ -18,7 +18,7 @@ pub struct PlaybackState {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
-    pub owner: usize,
+    pub owner: String,
     pub path: String,
     pub queue_position: usize,
 }

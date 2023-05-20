@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use protocol::network::FrameStream;
-use protocol::{AuthenticateRequest, GetInfo, Message, PlaybackState, PlayingState};
+use protocol::{AudioFrame, AuthenticateRequest, GetInfo, Message, PlaybackState, PlayingState};
 use tokio::time::timeout;
 use tokio::{net::TcpStream, sync::mpsc};
 
@@ -24,7 +24,10 @@ async fn main() -> std::io::Result<()> {
     frames.send(bytes).await?; */
 
     // handshake
-    stream.send(&Message::Handshake("meow".to_string())).await.unwrap();
+    stream
+        .send(&Message::Handshake("meow".to_string()))
+        .await
+        .unwrap();
 
     let hs_timeout = std::time::Duration::from_millis(1000);
     if let Ok(hsr) = timeout(hs_timeout, stream.get_inner().next()).await {
@@ -57,45 +60,82 @@ async fn main() -> std::io::Result<()> {
             id: my_id.clone(),
             name: my_id.clone().repeat(5), // TODO temp
         }))
-        .await.unwrap();
+        .await
+        .unwrap();
 
-    let track = protocol::Track {
-        path: "blah".to_string(),
-        owner: 0,
-        queue_position: 0,
-    };
+    let (message_tx, mut message_rx) = mpsc::unbounded_channel::<Message>();
 
-    stream.send(&Message::QueuePush(track)).await.unwrap();
-    stream.send(&Message::GetInfo(GetInfo::QueueList)).await.unwrap();
+    let (audio_tx, mut audio_rx) = std::sync::mpsc::channel::<AudioFrame>();
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
-
-    tokio::spawn(async move {
-        // these would be the two sides of it
-        // todo.. how do we coordinate that?
-        let mut t = Track::load("./test.mp3").unwrap();
+    // audio player thread
+    std::thread::spawn(move || {
+        // temp: each track needs its own player somehow
         let mut p = audio::Player::new();
 
-        dbg!(&t.samples.len());
-        for _ in 0..200 {
-            let f = t.encode_frame();
-            tx.send(Message::AudioFrame(f.clone())).unwrap();
-            p.receive(f.data);
-        }
-        p.debug_export();
+        let mut temp = 0;
 
         loop {
-            //tx.send(Message::AudioFrame(f)).unwrap();
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if let Ok(frame) = audio_rx.recv() {
+                println!("player thread got {:?}", frame);
+                p.receive(frame.data);
+                temp += 1;
+            }
+
+            if temp == 200 {
+                p.play();
+            }
         }
     });
+
+    if my_id == "1" {
+        println!("id is '1', sending track");
+
+        let track = protocol::Track {
+            path: "blah".to_string(),
+            owner: my_id.clone(),
+            queue_position: 0,
+        };
+
+        stream.send(&Message::QueuePush(track)).await.unwrap();
+        stream
+            .send(&Message::GetInfo(GetInfo::QueueList))
+            .await
+            .unwrap();
+
+        let audio_tx_2 = audio_tx.clone();
+        tokio::spawn(async move {
+            // these would be the two sides of it
+            // todo.. how do we coordinate that?
+            let mut t: Track = Track::load("../test.mp3").unwrap();
+
+            dbg!(&t.samples.len());
+            for _ in 0..200 {
+                let f = t.encode_frame();
+
+                // send to our own audio thread
+                audio_tx_2.send(f.clone()).unwrap();
+
+                // send to server
+                message_tx.send(Message::AudioFrame(f)).unwrap();
+            }
+
+            loop {
+                // todo: keep sending frames
+
+                //tx.send(Message::AudioFrame(f)).unwrap();
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+        });
+    } else {
+        println!("id is not '1', not sending anything")
+    }
 
     loop {
         tokio::select! {
             // something to send
-            Some(msg) = rx.recv() => {
+            Some(msg) = message_rx.recv() => {
                 stream.send(&msg).await.unwrap();
-            },
+            }
 
             // tcp message
             result = stream.get_inner().next() => match result {
@@ -103,6 +143,14 @@ async fn main() -> std::io::Result<()> {
                     let msg: Message =
                         bincode::deserialize(&bytes).expect("failed to deserialize message");
                     println!("received message: {:?}", msg);
+
+                    match msg {
+                        Message::AudioFrame(f) => {
+                            audio_tx.send(f).unwrap();
+                        }
+
+                        _ => {}
+                    }
                 }
 
                 Some(Err(e)) => {
