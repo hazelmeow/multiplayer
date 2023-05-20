@@ -1,10 +1,11 @@
 use futures::{SinkExt, StreamExt};
-use protocol::{Message, PlaybackState, PlayingState};
-use tokio::net::TcpStream;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use protocol::{GetInfo, Message, PlaybackState, PlayingState};
 use tokio::time::timeout;
+use tokio::{net::TcpStream, sync::mpsc};
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use std::io::{Read, Write};
+mod audio;
+use audio::Track;
 
 // use cpal::traits::{DeviceTrait, HostTrait};
 
@@ -14,7 +15,7 @@ async fn main() -> std::io::Result<()> {
 
     let mut frames = Framed::new(stream, LengthDelimitedCodec::new());
 
-    /* 
+    /*
     let message = Message::PlaybackState(PlaybackState {
         state: PlayingState::Playing,
     });
@@ -37,9 +38,8 @@ async fn main() -> std::io::Result<()> {
                         return Ok(()); // not okay
                     }
                 }
-            },
-            Some(Err(_)) |
-            None => {
+            }
+            Some(Err(_)) | None => {
                 eprintln!("handshake failed");
                 return Ok(());
             }
@@ -51,60 +51,78 @@ async fn main() -> std::io::Result<()> {
 
     // handshake okay
 
+
+
+    let track = protocol::Track {
+        path: "blah".to_string(),
+        owner: 0,
+        queue_position: 0,
+    };
+
+    frames
+        .send(serialize_message(&Message::QueuePush(track)).unwrap())
+        .await?;
+    frames
+        .send(serialize_message(&Message::GetInfo(GetInfo::QueueList)).unwrap())
+        .await?;
+
+    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+
+    tokio::spawn(async move {
+        // these would be the two sides of it
+        // todo.. how do we coordinate that?
+        let mut t = Track::load("./test.mp3").unwrap();
+        let mut p = audio::Player::new();
+
+        dbg!(&t.samples.len());
+        for _ in 0..200 {
+            let f = t.encode_frame();
+            tx.send(Message::AudioFrame(f.clone())).unwrap();
+            p.receive(f.data);
+        }
+        p.debug_export();
+
+        loop {
+            //tx.send(Message::AudioFrame(f)).unwrap();
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        }
+    });
+
+
     loop {
-        let result = frames.next().await;
-
-        match result {
-            Some(Ok(bytes)) => {
-                let msg: Message =
-                    bincode::deserialize(&bytes).expect("failed to deserialize message");
-                println!("received message: {:?}", msg);
+        tokio::select! {
+            // something to send
+            Some(msg) = rx.recv() => {
+                frames.send(serialize_message(&msg).unwrap()).await?;
             }
 
-            Some(Err(e)) => {
-                println!("error occurred while processing message: {:?}", e)
-            }
+            // tcp message
+            result = frames.next() => match result {
+                Some(Ok(bytes)) => {
+                    let msg: Message =
+                        bincode::deserialize(&bytes).expect("failed to deserialize message");
+                    println!("received message: {:?}", msg);
+                }
 
-            // socket disconnected
-            None => break,
+                Some(Err(e)) => {
+                    println!("error occurred while processing message: {:?}", e)
+                }
+
+                // socket disconnected
+                None => break,
+            }
         }
     }
 
     println!("disconnected");
 
     Ok(())
-
-    // let host = cpal::default_host();
-    // let device = host
-    //     .default_output_device()
-    //     .expect("no output device available");
-    // let mut configs = device
-    //     .supported_output_configs()
-    //     .expect("error while querying configs");
-    // let config = configs
-    //     .next()
-    //     .expect("no supported configs")
-    //     .with_max_sample_rate();
-
-    // let stream = device.build_output_stream(
-    //     &config.into(),
-    //     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-    //         //
-    //     },
-    //     move |err| {
-    //         //
-    //     },
-    //     None,
-    // );
-
-    // // The sound plays in a separate audio thread,
-    // // so we need to keep the main thread alive while it's playing.
-    // // Press ctrl + C to stop the process once you're done.
-    // loop {}
 }
 
-
+// this thingy should maybeeeee be inside protocol? or something...
+// it's not right to put it there but we really need it in both player and server
 fn serialize_message(m: &Message) -> Result<bytes::Bytes, bincode::Error> {
     let s = bincode::serialize(m)?;
     Ok(bytes::Bytes::from(s))
 }
+

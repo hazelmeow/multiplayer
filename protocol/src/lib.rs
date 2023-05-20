@@ -14,11 +14,16 @@ pub struct PlaybackState {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct AudioFrame {
-    frame: u32,
+pub struct Track {
+    pub owner: usize,
+    pub path: String,
+    pub queue_position: usize,
+}
 
-    #[serde(with = "BigArray")]
-    data: [u8; 960], // 48khz -> 960samples in a 20ms frame
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AudioFrame {
+    pub frame: u32,
+    pub data: Vec<u8>
 }
 
 // server to client
@@ -27,6 +32,20 @@ pub enum Message {
     Handshake(String),
     PlaybackState(PlaybackState),
     AudioFrame(AudioFrame),
+
+    GetInfo(GetInfo),
+    Info(Info),
+    QueuePush(Track)
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Info {
+    QueueList(Vec<Track>),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum GetInfo {
+    QueueList,
 }
 
 // client to server
@@ -36,3 +55,4 @@ pub enum Command {
     Test(String),
     AudioFrame(AudioFrame),
 }
+

@@ -1,8 +1,8 @@
 use futures::{SinkExt, StreamExt};
-use protocol::Message;
+use protocol::{Message, Track};
 use tokio::io;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, MutexGuard};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use std::collections::HashMap;
@@ -41,12 +41,15 @@ type Rx = mpsc::UnboundedReceiver<Message>;
 struct Shared {
     // map of mpsc channel senders
     peers: HashMap<SocketAddr, Tx>,
+
+    queue: Vec<Track>,
 }
 
 impl Shared {
     fn new() -> Self {
         Shared {
             peers: HashMap::new(),
+            queue: vec![],
         }
     }
 
@@ -110,7 +113,7 @@ async fn handle_connection(
                         } else {
                             println!("* {} - invalid handshake", addr);
                         }
-                        
+
                     }
                 } else {
                     println!("* {} - invalid handshake", addr);
@@ -126,7 +129,7 @@ async fn handle_connection(
                 {
                     let mut state = state.lock().await;
                     state.peers.remove(&addr);
-            
+
                 }
                 return Ok(())
             }
@@ -161,7 +164,8 @@ async fn handle_connection(
 
                     let msg: Message = bincode::deserialize(&bytes).expect("failed to deserialize message");
                     state.broadcast(addr, &msg).await;
-                    println!("* {} - {:?}", addr, &msg);
+                    //println!("* {} - {:?}", addr, &msg);
+                    handle_message(state, addr, &mut peer, &msg).await;
                 }
 
                 Some(Err(e)) => {
@@ -183,6 +187,30 @@ async fn handle_connection(
     }
 
     Ok(())
-
 }
 
+async fn handle_message(mut state: MutexGuard<'_, Shared>, addr: SocketAddr, peer: &mut Peer, m: &Message) {
+    match m {
+        Message::Handshake(_) => {},
+
+        Message::PlaybackState(_) => todo!(),
+        Message::AudioFrame(frame) => {
+            println!("* {} - audio frame [{}] with length {}", addr, frame.frame, frame.data.len());
+        },
+
+        Message::GetInfo(info) => {
+            match info {
+                protocol::GetInfo::QueueList => {
+                    let m = Message::Info(protocol::Info::QueueList(state.queue.clone()));
+                    let bytes = bytes::Bytes::from(bincode::serialize(&m).unwrap());
+                    peer.frames.send(bytes).await.unwrap();
+                },
+            }
+        },
+        Message::QueuePush(track) => {
+            state.queue.push(track.to_owned());
+        },
+        Message::Info(_) => todo!(),
+        
+    }
+}
