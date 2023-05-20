@@ -24,7 +24,7 @@ async fn main() -> std::io::Result<()> {
     frames.send(bytes).await?; */
 
     // handshake
-    stream.send(&Message::Handshake("meow".to_string())).await;
+    stream.send(&Message::Handshake("meow".to_string())).await.unwrap();
 
     let hs_timeout = std::time::Duration::from_millis(1000);
     if let Ok(hsr) = timeout(hs_timeout, stream.get_inner().next()).await {
@@ -57,7 +57,7 @@ async fn main() -> std::io::Result<()> {
             id: my_id.clone(),
             name: my_id.clone().repeat(5), // TODO temp
         }))
-        .await;
+        .await.unwrap();
 
     let track = protocol::Track {
         path: "blah".to_string(),
@@ -65,8 +65,8 @@ async fn main() -> std::io::Result<()> {
         queue_position: 0,
     };
 
-    stream.send(&Message::QueuePush(track)).await;
-    stream.send(&Message::GetInfo(GetInfo::QueueList)).await;
+    stream.send(&Message::QueuePush(track)).await.unwrap();
+    stream.send(&Message::GetInfo(GetInfo::QueueList)).await.unwrap();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
@@ -94,8 +94,8 @@ async fn main() -> std::io::Result<()> {
         tokio::select! {
             // something to send
             Some(msg) = rx.recv() => {
-                stream.send(&msg).await;
-            }
+                stream.send(&msg).await.unwrap();
+            },
 
             // tcp message
             result = stream.get_inner().next() => match result {
