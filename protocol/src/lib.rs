@@ -1,5 +1,8 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
-use serde_big_array::BigArray;
+
+pub mod network;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum PlayingState {
@@ -23,19 +26,28 @@ pub struct Track {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AudioFrame {
     pub frame: u32,
-    pub data: Vec<u8>
+    pub data: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct AuthenticateRequest {
+    pub id: String,
+    pub name: String,
 }
 
 // server to client
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {
     Handshake(String),
+    Authenticate(AuthenticateRequest),
     PlaybackState(PlaybackState),
     AudioFrame(AudioFrame),
 
     GetInfo(GetInfo),
     Info(Info),
-    QueuePush(Track)
+    QueuePush(Track),
+
+    ConnectedUsers(HashMap<String, String>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -47,12 +59,3 @@ pub enum Info {
 pub enum GetInfo {
     QueueList,
 }
-
-// client to server
-#[derive(Serialize, Deserialize)]
-pub enum Command {
-    Handshake(String),
-    Test(String),
-    AudioFrame(AudioFrame),
-}
-

@@ -1,8 +1,8 @@
-use futures::{SinkExt, StreamExt};
-use protocol::{GetInfo, Message, PlaybackState, PlayingState};
+use futures::StreamExt;
+use protocol::network::FrameStream;
+use protocol::{AuthenticateRequest, GetInfo, Message, PlaybackState, PlayingState};
 use tokio::time::timeout;
 use tokio::{net::TcpStream, sync::mpsc};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 mod audio;
 use audio::Track;
@@ -11,9 +11,8 @@ use audio::Track;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::io::Result<()> {
-    let stream = TcpStream::connect("127.0.0.1:8080").await?;
-
-    let mut frames = Framed::new(stream, LengthDelimitedCodec::new());
+    let tcp_stream = TcpStream::connect("127.0.0.1:8080").await?;
+    let mut stream = FrameStream::new(tcp_stream);
 
     /*
     let message = Message::PlaybackState(PlaybackState {
@@ -25,11 +24,10 @@ async fn main() -> std::io::Result<()> {
     frames.send(bytes).await?; */
 
     // handshake
-    let hs = serialize_message(&Message::Handshake("meow".to_string())).unwrap();
-    frames.send(hs).await?;
+    stream.send(&Message::Handshake("meow".to_string())).await;
 
     let hs_timeout = std::time::Duration::from_millis(1000);
-    if let Ok(hsr) = timeout(hs_timeout, frames.next()).await {
+    if let Ok(hsr) = timeout(hs_timeout, stream.get_inner().next()).await {
         match hsr {
             Some(Ok(r)) => {
                 let response: Message = bincode::deserialize(&r).unwrap();
@@ -49,9 +47,17 @@ async fn main() -> std::io::Result<()> {
         return Ok(());
     };
 
-    // handshake okay
+    // handshake okay, send authentication
+    let args: Vec<String> = std::env::args().collect();
+    let my_id = &args[1];
+    println!("connecting as {:?}", my_id);
 
-
+    stream
+        .send(&Message::Authenticate(AuthenticateRequest {
+            id: my_id.clone(),
+            name: my_id.clone().repeat(5), // TODO temp
+        }))
+        .await;
 
     let track = protocol::Track {
         path: "blah".to_string(),
@@ -59,12 +65,8 @@ async fn main() -> std::io::Result<()> {
         queue_position: 0,
     };
 
-    frames
-        .send(serialize_message(&Message::QueuePush(track)).unwrap())
-        .await?;
-    frames
-        .send(serialize_message(&Message::GetInfo(GetInfo::QueueList)).unwrap())
-        .await?;
+    stream.send(&Message::QueuePush(track)).await;
+    stream.send(&Message::GetInfo(GetInfo::QueueList)).await;
 
     let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
 
@@ -88,16 +90,15 @@ async fn main() -> std::io::Result<()> {
         }
     });
 
-
     loop {
         tokio::select! {
             // something to send
             Some(msg) = rx.recv() => {
-                frames.send(serialize_message(&msg).unwrap()).await?;
+                stream.send(&msg).await;
             }
 
             // tcp message
-            result = frames.next() => match result {
+            result = stream.get_inner().next() => match result {
                 Some(Ok(bytes)) => {
                     let msg: Message =
                         bincode::deserialize(&bytes).expect("failed to deserialize message");
@@ -118,11 +119,3 @@ async fn main() -> std::io::Result<()> {
 
     Ok(())
 }
-
-// this thingy should maybeeeee be inside protocol? or something...
-// it's not right to put it there but we really need it in both player and server
-fn serialize_message(m: &Message) -> Result<bytes::Bytes, bincode::Error> {
-    let s = bincode::serialize(m)?;
-    Ok(bytes::Bytes::from(s))
-}
-
