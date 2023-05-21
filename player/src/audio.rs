@@ -231,12 +231,14 @@ impl AudioReader {
     pub fn finished(&self) -> bool {
         self.finished
     }
+
 }
 
 pub struct Player {
     decoder: Decoder,
     buffer: Arc<Mutex<Ringbuf<f32>>>,
     stream: Option<Stream>,
+    frames_received: usize,
 }
 impl Player {
     pub fn new() -> Self {
@@ -244,6 +246,7 @@ impl Player {
             decoder: Decoder::new(48000, opus::Channels::Stereo).unwrap(),
             buffer: Arc::new(Mutex::new(Ringbuf::<f32>::new(48000 * 10))), // 10s??
             stream: None,
+            frames_received: 0,
         }
     }
 
@@ -252,6 +255,7 @@ impl Player {
         // allocate and decode into here
         let mut pcm = vec![0.0; 960];
         self.decoder.decode_float(&frame, &mut pcm, false).unwrap();
+        self.frames_received += 1;
 
         let mut buffer = self.buffer.lock().unwrap();
         if buffer.len() < buffer.free_len() {
@@ -316,6 +320,7 @@ impl Player {
     pub fn clear(&mut self) {
         println!("clearing playback buffer");
         self.buffer.lock().unwrap().clear();
+        self.frames_received = 0;
     }
 
     pub fn finish(&mut self) -> bool {
@@ -332,6 +337,12 @@ impl Player {
     pub fn ready(&self) -> bool {
         let buffer = self.buffer.lock().unwrap();
         buffer.len() > 48000 * 2 // 2s...
+    }
+    pub fn get_seconds_elapsed(&self) -> usize {
+        self.frames_received * 480 / 48000
+    }
+    pub fn fake_frames_received(&mut self, frames: usize) {
+        self.frames_received = frames;
     }
 }
 

@@ -2,7 +2,7 @@ use futures::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use std::error::Error;
+use std::{error::Error, net::SocketAddr};
 
 use crate::Message;
 
@@ -24,6 +24,9 @@ impl FrameStream {
     }
     pub fn get_inner(&mut self) -> &mut Framed<TcpStream, LengthDelimitedCodec> {
         &mut self.inner
+    }
+    pub fn get_addr(&self) -> Result<SocketAddr, std::io::Error> {
+        self.inner.get_ref().peer_addr()
     }
 
     pub async fn send(&mut self, msg: &Message) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -53,4 +56,5 @@ impl FrameStream {
             }
         }
     }
+
 }
