@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::error::Error;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
@@ -15,23 +16,23 @@ use symphonia::core::probe::{Hint, ProbeResult};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, Stream};
-use rubato::{FftFixedIn, Resampler};
+use rubato::{InterpolationParameters, Resampler, SincFixedOut};
 
 type Ringbuf<T> = LocalRb<T, Vec<MaybeUninit<T>>>;
 
 pub struct AudioReader {
     probe_result: ProbeResult,
     decoder: Box<dyn symphonia::core::codecs::Decoder>,
+    resampler: SincFixedOut<f32>,
     encoder: Encoder,
 
-    buffer: Ringbuf<f32>,
+    source_buffer: Vec<VecDeque<f32>>,
 
     position: usize, // we might not actually need this for anything now?
     finished: bool,
 
-    // not read until the first packet
-    sample_rate: Option<u32>,
-    channel_count: Option<usize>,
+    sample_rate: u32,
+    channel_count: usize,
 }
 
 impl AudioReader {
@@ -54,7 +55,7 @@ impl AudioReader {
             )
             .unwrap();
 
-        let decoder = symphonia::default::get_codecs()
+        let mut decoder = symphonia::default::get_codecs()
             .make(
                 &probe_result
                     .format
@@ -65,6 +66,49 @@ impl AudioReader {
             )
             .unwrap();
 
+        // read 1 packet to check the sample rate and channel count
+        // TODO: there HAS to be a better way than opening the file twice
+        let (sample_rate, channel_count) = {
+            let src2 = std::fs::File::open(path)?;
+            let mss2 = MediaSourceStream::new(Box::new(src2), Default::default());
+
+            let mut temp_probe = symphonia::default::get_probe()
+                .format(
+                    &hint,
+                    mss2,
+                    &FormatOptions {
+                        enable_gapless: true,
+                        ..FormatOptions::default()
+                    },
+                    &MetadataOptions::default(),
+                )
+                .unwrap();
+
+            let packet = temp_probe.format.next_packet().unwrap();
+            let decoded = decoder.decode(&packet).unwrap();
+            let spec = *decoded.spec();
+
+            (spec.rate, spec.channels.count())
+        };
+
+        let resampler = {
+            let params = InterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: rubato::InterpolationType::Linear,
+                oversampling_factor: 256,
+                window: rubato::WindowFunction::BlackmanHarris2,
+            };
+            SincFixedOut::<f32>::new(
+                48000 as f64 / sample_rate as f64,
+                1.0,
+                params,
+                480,
+                channel_count,
+            )
+            .unwrap()
+        };
+
         let encoder =
             opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
         //encoder.set_bitrate(opus::Bitrate::Bits(256)).unwrap();
@@ -72,93 +116,92 @@ impl AudioReader {
         Ok(Self {
             probe_result,
             decoder,
+            resampler,
             encoder,
 
-            buffer: Ringbuf::new(16384),
+            source_buffer: vec![VecDeque::new(); channel_count],
 
             position: 0,
             finished: false,
 
-            sample_rate: None,
-            channel_count: None,
+            sample_rate,
+            channel_count,
         })
     }
 
-    // Ok(true) if there's more to read
-    fn read_packets(&mut self) -> Result<bool, Box<dyn Error>> {
+    // sets self.finished if the end was reached
+    fn read_more(&mut self) -> Result<(), Box<dyn Error>> {
         println!("read_packet() called");
 
-        let mut has_more = true;
-        let mut channel_samples: Vec<Vec<f32>> = vec![Vec::new(); self.channel_count.unwrap_or(0)];
-        let mut sample_count = 0;
+        match self.probe_result.format.next_packet() {
+            Ok(packet) => {
+                let decoded = self.decoder.decode(&packet).unwrap();
+                let spec = *decoded.spec();
 
-        loop {
-            match self.probe_result.format.next_packet() {
-                Ok(packet) => {
-                    let decoded = self.decoder.decode(&packet).unwrap();
-                    let spec = *decoded.spec();
+                if decoded.frames() > 0 {
+                    let mut sample_buffer: SampleBuffer<f32> =
+                        SampleBuffer::new(decoded.frames() as u64, spec);
 
-                    if self.sample_rate == None {
-                        self.sample_rate = Some(spec.rate);
-                    }
-                    if self.channel_count == None {
-                        self.channel_count = Some(spec.channels.count());
+                    sample_buffer.copy_interleaved_ref(decoded);
 
-                        // we probably also need to allocate channel_samples now since this is the 1st packet we're processing
-                        channel_samples = vec![Vec::new(); spec.channels.count()];
-                    }
+                    let samples = sample_buffer.samples();
 
-                    if decoded.frames() > 0 {
-                        let mut sample_buffer: SampleBuffer<f32> =
-                            SampleBuffer::new(decoded.frames() as u64, spec);
+                    println!("packet had {:?}", samples.len());
 
-                        sample_buffer.copy_interleaved_ref(decoded);
-
-                        let samples = sample_buffer.samples();
-
-                        println!("packet had {:?}", samples.len());
-                        sample_count += samples.len();
-
-                        for frame in samples.chunks(spec.channels.count()) {
-                            for (chan, sample) in frame.iter().enumerate() {
-                                channel_samples[chan].push(*sample)
-                            }
+                    for frame in samples.chunks(spec.channels.count()) {
+                        for (chan, sample) in frame.iter().enumerate() {
+                            self.source_buffer[chan].push_back(*sample)
                         }
-                    } else {
-                        eprintln!("Empty packet encountered while loading song!");
                     }
+                } else {
+                    eprintln!("Empty packet encountered while loading song!");
                 }
-                Err(SymphoniaError::IoError(_)) => {
-                    // no more packets
-                    has_more = false;
-                    break;
-                }
-                Err(e) => return Err("failed to parse track".into()),
             }
+            Err(SymphoniaError::IoError(_)) => {
+                // no more packets
+                self.finished = true;
+            }
+            Err(e) => return Err("failed to parse track".into()),
+        }
 
-            // we should stop after a reasonable number of samples
-            // (a reasonable number --> nobody knows)
-            // we probably want more than 960 so we can resample enough at once (does that matter?)
-            if sample_count >= 2048 {
-                break;
+        Ok(())
+    }
+
+    fn resample_more(&mut self) -> Result<Vec<f32>, Box<dyn Error>> {
+        let samples_needed = if self.sample_rate != 48000 {
+            self.resampler.input_frames_next()
+        } else {
+            480 as usize
+        };
+
+        while self.source_buffer[0].len() < samples_needed {
+            if self.finished {
+                // if no more packets to read, pad with 0s until we reach input_frames_next
+                for chan in self.source_buffer.iter_mut() {
+                    println!("filling with 0s!!!");
+                    chan.push_back(0.0);
+                }
+            } else {
+                self.read_more()?;
             }
         }
 
-        println!("resampling....");
+        let mut chunk_samples: Vec<Vec<f32>> = vec![Vec::new(); self.channel_count];
+
+        for (chan_idx, chan) in self.source_buffer.iter_mut().enumerate() {
+            for _ in 0..samples_needed {
+                // maybe there's a better way to do this?
+                chunk_samples[chan_idx].push(chan.pop_front().unwrap());
+            }
+        }
 
         // resample to standard 48000 if needed
-        let samples_correct_rate = if self.sample_rate.unwrap() != 48000 {
-            let l = channel_samples[0].len();
-            let mut resampler =
-                FftFixedIn::<f32>::new(self.sample_rate.unwrap() as usize, 48000, l, 100, 2)
-                    .unwrap();
-
-            resampler.process(&channel_samples, None).unwrap()
+        let samples_correct_rate = if self.sample_rate != 48000 {
+            println!("resampling");
+            self.resampler.process(&chunk_samples, None).unwrap()
         } else {
-            channel_samples
+            chunk_samples
         };
-
-        println!("interleaving....");
 
         // now we have to interleave it since we had to use the resampling thing
         let samples: Vec<f32> = samples_correct_rate[0]
@@ -168,42 +211,20 @@ impl AudioReader {
             .copied()
             .collect();
 
-        println!(
-            "copying {:?} samples to the buffer which has {:?} free",
-            samples.len(),
-            self.buffer.free_len()
-        );
+        println!("resampled {:?} interleaved samples", samples.len(),);
 
-        for sample in samples.iter() {
-            self.buffer.push(*sample).unwrap();
-        }
-
-        Ok(has_more)
+        Ok(samples)
     }
 
     pub fn encode_frame(&mut self) -> Result<AudioFrame, ()> {
         const PCM_LENGTH: usize = 960;
 
-        // we don't have enough samples buffered to encode an opus frame, read more packets
-        if self.buffer.len() < PCM_LENGTH {
-            if let Ok(has_more) = self.read_packets() {
-                if !has_more {
-                    // no more packets, fill with 0s until we have a multiple of 960 frames
-                    while self.buffer.len() % 960 != 0 {
-                        self.buffer.push(0.0).unwrap();
-                    }
-
-                    self.finished = true;
-                }
-            } else {
-                // unrecoverable error?
-                return Err(());
-            }
-        }
-
         let mut pcm = [0.0; PCM_LENGTH];
 
-        self.buffer.pop_slice(&mut pcm);
+        let resampled = self.resample_more().unwrap();
+        for i in 0..PCM_LENGTH {
+            pcm[i] = resampled[i];
+        }
 
         let x = self.encoder.encode_vec_float(&pcm, 256).unwrap();
         self.position += 1;
