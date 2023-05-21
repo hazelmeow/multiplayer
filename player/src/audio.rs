@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
@@ -25,8 +26,8 @@ pub struct Track {
 }
 
 impl Track {
-    pub fn load(path: &str) -> Result<Self, ()> {
-        let src = std::fs::File::open(path).expect("failed to open media");
+    pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
+        let src = std::fs::File::open(path)?;
 
         let mss = MediaSourceStream::new(Box::new(src), Default::default());
 
@@ -60,6 +61,8 @@ impl Track {
             )
             .unwrap();
 
+        println!("loading into memory...");
+
         loop {
             match probe_result.format.next_packet() {
                 Ok(packet) => {
@@ -91,9 +94,11 @@ impl Track {
                     }
                 }
                 Err(SymphoniaError::IoError(_)) => break,
-                Err(e) => return Err(()),
+                Err(e) => return Err("failed to parse track".into()),
             }
         }
+
+        println!("resampling....");
 
         // resample to standard 48000 if needed
         let samples_correct_rate = if sample_rate != 48000 {
@@ -107,6 +112,8 @@ impl Track {
         } else {
             samples_not_interleaved.unwrap()
         };
+
+        println!("interlacing....");
 
         // now we have to interleave it since we had to use the resampling thing
         let samples: Vec<f32> = samples_correct_rate[0]

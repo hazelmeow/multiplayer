@@ -89,8 +89,22 @@ impl Connection {
                 Some(UIEvent::GetInfo(GetInfo::QueueList))
             } else if line == "aq" {
                 Some(UIEvent::TestAddQueue)
-            } else if line == "p" {
-                Some(UIEvent::TestPlay)
+            } else if line.starts_with("p ") {
+                let p = line.split_ascii_whitespace().nth(1);
+                if let Some(path) = p {
+                    Some(UIEvent::TestPlay(path.to_string()))
+                } else {
+                    None
+                }
+            } else if line.starts_with("c ") {
+                let mut c = line.split_ascii_whitespace().into_iter().collect::<Vec<&str>>();
+                if c.len() < 2{
+                    None
+                } else {
+                    c.remove(0);
+                    let t = c.join(" ");
+                    Some(UIEvent::Test(t.to_string()))
+                }
             } else {
                 println!("?");
                 None
@@ -149,7 +163,7 @@ impl Connection {
             }
         });
     }
-    async fn xmit_test(&mut self) {
+    async fn xmit_test(&mut self, path: String) {
         let track = protocol::Track {
             path: "blah".to_string(),
             owner: self.my_id.clone(),
@@ -168,7 +182,11 @@ impl Connection {
 
         self.play_state = PlayState::Transmitting;
         tokio::spawn(async move {
-            let mut t: Track = Track::load("../temp/demo.mp3").unwrap();
+            let mut t: Track = match Track::load(&path) {
+                Ok(t) => t,
+                Err(_) => return
+            };
+
 
             dbg!(&t.samples.len());
             audio_tx_2.send(AudioData::Clear).unwrap();
@@ -269,7 +287,9 @@ impl Connection {
                 // some ui event
                 Some(event) = self.ui_rx.recv() => {
                     match event {
-                        UIEvent::Test(_) => todo!(),
+                        UIEvent::Test(text) => {
+                            self.message_tx.send(Message::Text(text)).unwrap();
+                        },
                         UIEvent::GetInfo(i) => {
                             self.message_tx.send(Message::GetInfo(i)).unwrap();
                         },
@@ -283,10 +303,10 @@ impl Connection {
                             self.message_tx.send(Message::GetInfo(GetInfo::QueueList)).unwrap();
                             // and uhh put it in idk
                         },
-                        UIEvent::TestPlay => {
+                        UIEvent::TestPlay(path) => {
                             if self.play_state == PlayState::Stopped {
                                 println!("{:?}", self.play_state);
-                                self.xmit_test().await;
+                                self.xmit_test(path).await;
                             }
                         },
                         UIEvent::Quit => break,
@@ -317,7 +337,7 @@ enum UIEvent {
     Test(String),
     GetInfo(GetInfo),
     TestAddQueue,
-    TestPlay,
+    TestPlay(String),
     Quit,
 }
 

@@ -254,6 +254,12 @@ async fn handle_message(
             Ok(())
         }
         Message::Info(_) => todo!(),
+        Message::Text(text) => {
+            println!("* {} - '{}'", peer.addr, text);
+            // resend this message to all other peers
+            state.lock().await.broadcast_others(&peer, m).await;
+            Ok(())
+        },
 
         // should not be reached
         Message::Handshake(_) => Ok(()),

@@ -42,6 +42,7 @@ pub enum Message {
     Authenticate(AuthenticateRequest),
     PlaybackState(PlaybackState),
     AudioFrame(AudioFrame),
+    Text(String),
 
     GetInfo(GetInfo),
     Info(Info),
