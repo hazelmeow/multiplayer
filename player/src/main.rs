@@ -7,10 +7,7 @@ use tokio::time::timeout;
 use tokio::{net::TcpStream, sync::mpsc};
 
 mod audio;
-use audio::Track;
-
-// use cpal::traits::{DeviceTrait, HostTrait};
-
+use audio::AudioReader;
 struct Connection {
     stream: FrameStream,
     my_id: String,
@@ -97,8 +94,11 @@ impl Connection {
                     None
                 }
             } else if line.starts_with("c ") {
-                let mut c = line.split_ascii_whitespace().into_iter().collect::<Vec<&str>>();
-                if c.len() < 2{
+                let mut c = line
+                    .split_ascii_whitespace()
+                    .into_iter()
+                    .collect::<Vec<&str>>();
+                if c.len() < 2 {
                     None
                 } else {
                     c.remove(0);
@@ -182,13 +182,11 @@ impl Connection {
 
         self.play_state = PlayState::Transmitting;
         tokio::spawn(async move {
-            let mut t: Track = match Track::load(&path) {
+            let mut t: AudioReader = match AudioReader::load(&path) {
                 Ok(t) => t,
-                Err(_) => return
+                Err(_) => return,
             };
 
-
-            dbg!(&t.samples.len());
             audio_tx_2.send(AudioData::Clear).unwrap();
             audio_tx_2.send(AudioData::Start).unwrap();
 
@@ -199,7 +197,7 @@ impl Connection {
                 .unwrap();
 
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
-            while (t.position + 1) * 960 < t.samples.len() {
+            loop {
                 // ok let's actually do the math for this
                 // each frame is 960 samples
                 // at 48k that means it's 20ms per frame
@@ -207,8 +205,13 @@ impl Connection {
                 // i think.................
                 // LOL OK it's two frames idk why maybe because it's stereo interleaved??????
                 interval.tick().await;
-                
+
                 for _ in 0..20 {
+                    // stop in the middle of this "tick" of 20 frames
+                    if t.finished() {
+                        break;
+                    };
+
                     let f = t.encode_frame();
                     if let Ok(frame) = f {
                         audio_tx_2.send(AudioData::Frame(frame.clone())).unwrap();
@@ -217,8 +220,14 @@ impl Connection {
                         break; // we're done i guess
                     }
                 }
+
+                // we encoded the entire file
+                if t.finished() {
+                    break;
+                };
             }
 
+            // TODO: should be "End"? and should finish playing without stopping immediately
             audio_tx_2.send(AudioData::Stop).unwrap();
             message_tx_2
                 .send(Message::PlaybackState(PlaybackState {
