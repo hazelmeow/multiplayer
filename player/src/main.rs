@@ -199,7 +199,7 @@ impl Connection {
                 .unwrap();
 
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
-            while (t.position + 1) * 960 <= t.samples.len() {
+            while (t.position + 1) * 960 < t.samples.len() {
                 // ok let's actually do the math for this
                 // each frame is 960 samples
                 // at 48k that means it's 20ms per frame
