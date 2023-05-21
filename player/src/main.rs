@@ -1,6 +1,6 @@
 use futures::StreamExt;
 use protocol::network::FrameStream;
-use protocol::{AudioFrame, AuthenticateRequest, GetInfo, Message, PlaybackState, PlayingState};
+use protocol::{AudioFrame, AuthenticateRequest, GetInfo, Message, PlayingState};
 use std::error::Error;
 use std::io;
 use tokio::time::timeout;
@@ -151,6 +151,13 @@ impl Connection {
                     AudioData::Stop => {
                         p.pause();
                     }
+                    AudioData::Finish => {
+                        while !p.finish() {
+                            println!("finishing.....");
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        p.pause();
+                    }
                     AudioData::Shutdown => break,
                     AudioData::Clear => {
                         p.clear();
@@ -190,11 +197,7 @@ impl Connection {
             audio_tx_2.send(AudioData::Clear).unwrap();
             audio_tx_2.send(AudioData::Start).unwrap();
 
-            message_tx_2
-                .send(Message::PlaybackState(PlaybackState {
-                    state: PlayingState::Playing,
-                }))
-                .unwrap();
+            message_tx_2.send(Message::PlayingState(PlayingState::Playing)).unwrap();
 
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
             loop {
@@ -227,13 +230,9 @@ impl Connection {
                 };
             }
 
-            // TODO: should be "End"? and should finish playing without stopping immediately
-            audio_tx_2.send(AudioData::Stop).unwrap();
-            message_tx_2
-                .send(Message::PlaybackState(PlaybackState {
-                    state: PlayingState::Stopped,
-                }))
-                .unwrap();
+            audio_tx_2.send(AudioData::Finish).unwrap();
+            message_tx_2.send(Message::PlayingState(PlayingState::Stopped)).unwrap();
+
         });
     }
     async fn main_loop(&mut self) {
@@ -242,8 +241,8 @@ impl Connection {
                 // something to send
                 Some(msg) = self.message_rx.recv() => {
                     // temporary hack, we need another channel for this stuff
-                    if let Message::PlaybackState(state) = &msg {
-                        if state.state == PlayingState::Stopped {
+                    if let Message::PlayingState(state) = &msg {
+                        if *state == PlayingState::Stopped {
                             self.play_state = PlayState::Stopped;
                         }
                     }
@@ -265,15 +264,15 @@ impl Connection {
                                     println!("got audio frame when not receiving?!");
                                 }
                             },
-                            Message::PlaybackState(s) => {
-                                match s.state {
+                            Message::PlayingState(s) => {
+                                match s {
                                     PlayingState::Playing => {
                                         self.play_state = PlayState::Receiving;
                                         self.audio_tx.send(AudioData::Start).unwrap();
                                     },
                                     PlayingState::Stopped => {
                                         self.play_state = PlayState::Stopped;
-                                        self.audio_tx.send(AudioData::Stop).unwrap();
+                                        self.audio_tx.send(AudioData::Finish).unwrap();
                                     },
                                     _ => {}
                                 }
@@ -358,6 +357,7 @@ enum AudioData {
     Start,
     Frame(AudioFrame),
     Stop,
+    Finish,
     Clear,
     Shutdown,
 }

@@ -131,8 +131,6 @@ impl AudioReader {
 
     // sets self.finished if the end was reached
     fn read_more(&mut self) -> Result<(), Box<dyn Error>> {
-        println!("read_packet() called");
-
         match self.probe_result.format.next_packet() {
             Ok(packet) => {
                 let decoded = self.decoder.decode(&packet).unwrap();
@@ -145,8 +143,6 @@ impl AudioReader {
                     sample_buffer.copy_interleaved_ref(decoded);
 
                     let samples = sample_buffer.samples();
-
-                    println!("packet had {:?}", samples.len());
 
                     for frame in samples.chunks(spec.channels.count()) {
                         for (chan, sample) in frame.iter().enumerate() {
@@ -197,7 +193,6 @@ impl AudioReader {
 
         // resample to standard 48000 if needed
         let samples_correct_rate = if self.sample_rate != 48000 {
-            println!("resampling");
             self.resampler.process(&chunk_samples, None).unwrap()
         } else {
             chunk_samples
@@ -210,8 +205,6 @@ impl AudioReader {
             .flat_map(|(a, b)| a.into_iter().chain(b))
             .copied()
             .collect();
-
-        println!("resampled {:?} interleaved samples", samples.len(),);
 
         Ok(samples)
     }
@@ -311,6 +304,7 @@ impl Player {
 
     pub fn pause(&mut self) {
         assert!(self.stream.is_some());
+        println!("pausing stream");
         self.stream.as_mut().unwrap().pause().unwrap();
     }
 
@@ -320,7 +314,19 @@ impl Player {
     }
 
     pub fn clear(&mut self) {
+        println!("clearing playback buffer");
         self.buffer.lock().unwrap().clear();
+    }
+
+    pub fn finish(&mut self) -> bool {
+        {
+            let buffer = self.buffer.lock().unwrap();
+            if buffer.len() > 1024 { // we will lose a tiny bit but
+                return false;
+            }
+        }
+        self.pause();
+        true
     }
 
     pub fn ready(&self) -> bool {

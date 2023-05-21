@@ -12,11 +12,6 @@ pub enum PlayingState {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct PlaybackState {
-    pub state: PlayingState,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
     pub owner: String,
     pub path: String,
@@ -40,7 +35,7 @@ pub struct AuthenticateRequest {
 pub enum Message {
     Handshake(String),
     Authenticate(AuthenticateRequest),
-    PlaybackState(PlaybackState),
+    PlayingState(PlayingState),
     AudioFrame(AudioFrame),
     Text(String),
 
@@ -59,4 +54,5 @@ pub enum Info {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum GetInfo {
     QueueList,
+    PlayingState,
 }

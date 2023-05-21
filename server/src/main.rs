@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
 use protocol::network::FrameStream;
-use protocol::{Message, Track};
+use protocol::{Message, PlayingState, Track};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -44,6 +44,7 @@ struct Shared {
     peer_names: HashMap<String, String>,
 
     queue: Vec<Track>,
+    playing_state: PlayingState,
 }
 
 impl Shared {
@@ -52,6 +53,7 @@ impl Shared {
             peers: HashMap::new(),
             peer_names: HashMap::new(),
             queue: vec![],
+            playing_state: PlayingState::Stopped,
         }
     }
 
@@ -217,7 +219,7 @@ async fn handle_message(
     m: &Message,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     match m {
-        Message::PlaybackState(p) => {
+        Message::PlayingState(p) => {
             println!("* {} - (id {}) playback state {:?}", peer.addr, peer.id, p);
 
             // resend this message to all other peers
@@ -239,17 +241,33 @@ async fn handle_message(
             Ok(())
         }
 
-        Message::GetInfo(info) => match info {
-            protocol::GetInfo::QueueList => {
-                let state = state.lock().await;
-                let m = Message::Info(protocol::Info::QueueList(state.queue.clone()));
-                peer.stream.send(&m).await?;
+        Message::GetInfo(info) => {
+            let state = state.lock().await;
+            match info {
+                protocol::GetInfo::QueueList => {
+                    let m = Message::Info(protocol::Info::QueueList(state.queue.clone()));
+                    peer.stream.send(&m).await?;
 
-                Ok(())
+                    Ok(())
+                }
+                protocol::GetInfo::PlayingState => {
+                    let m = Message::PlayingState(state.playing_state.clone());
+                    peer.stream.send(&m).await?;
+
+                    Ok(())
+                }
             }
-        },
+        }
         Message::QueuePush(track) => {
-            state.lock().await.queue.push(track.to_owned());
+            let mut state = state.lock().await;
+            state.queue.push(track.to_owned());
+            let m = Message::Info(protocol::Info::QueueList(state.queue.clone()));
+            state.broadcast(&m).await;
+
+            state.playing_state = PlayingState::Playing;
+
+            let m = Message::PlayingState(state.playing_state.clone());
+            state.broadcast(&m).await;
 
             Ok(())
         }
@@ -259,7 +277,7 @@ async fn handle_message(
             // resend this message to all other peers
             state.lock().await.broadcast_others(&peer, m).await;
             Ok(())
-        },
+        }
 
         // should not be reached
         Message::Handshake(_) => Ok(()),
