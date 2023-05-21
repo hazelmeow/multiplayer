@@ -217,7 +217,14 @@ async fn handle_message(
     m: &Message,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     match m {
-        Message::PlaybackState(_) => todo!(),
+        Message::PlaybackState(p) => {
+            println!("* {} - (id {}) playback state {:?}", peer.addr, peer.id, p);
+
+            // resend this message to all other peers
+            state.lock().await.broadcast_others(&peer, m).await;
+
+            Ok(())
+        }
         Message::AudioFrame(frame) => {
             println!(
                 "* {} - audio frame [{}] with length {}",

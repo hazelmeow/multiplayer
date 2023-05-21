@@ -132,8 +132,17 @@ impl Track {
         })
     }
 
-    pub fn encode_frame(&mut self) -> AudioFrame {
+    pub fn encode_frame(&mut self) -> Result<AudioFrame, ()> {
         const pcm_length: usize = 960;
+
+        if pcm_length * (self.position + 1) >= self.samples.len() {
+            println!(
+                "encode_frame was about to run out of samples at pos {}",
+                self.position
+            );
+            return Err(());
+        }
+
         let mut pcm = [0.0; pcm_length];
 
         for i in 0..pcm_length {
@@ -143,10 +152,10 @@ impl Track {
         let x = self.encoder.encode_vec_float(&pcm, 256).unwrap();
         self.position += 1;
 
-        AudioFrame {
+        Ok(AudioFrame {
             frame: self.position as u32,
             data: x,
-        }
+        })
     }
 }
 
@@ -172,8 +181,14 @@ impl Player {
         let mut pcm = vec![0.0; 960];
         self.decoder.decode_float(&frame, &mut pcm, false).unwrap();
 
-        // copy to ringbuffer
-        self.buffer.lock().unwrap().push_slice(&pcm);
+        let mut buffer = self.buffer.lock().unwrap();
+        if buffer.len() < buffer.free_len() {
+            // copy to ringbuffer
+            buffer.push_slice(&pcm);
+        } else {
+            // otherwise just discard i guess
+            println!("player buffer full... discarding :/")
+        }
     }
 
     pub fn play(&mut self) {
@@ -214,13 +229,41 @@ impl Player {
         // dont let it be dropped
         self.stream = Some(stream);
     }
+
+    pub fn pause(&mut self) {
+        assert!(self.stream.is_some());
+        self.stream.as_mut().unwrap().pause().unwrap();
+    }
+
+    pub fn resume(&mut self) {
+        assert!(self.stream.is_some());
+        self.stream.as_mut().unwrap().play().unwrap();
+    }
+
+    pub fn clear(&mut self) {
+        self.buffer.lock().unwrap().clear();
+    }
+
+    pub fn ready(&self) -> bool {
+        let buffer = self.buffer.lock().unwrap();
+        buffer.len() > 48000 * 2 // 2s...
+    }
 }
 
 // callback when the audio output needs more data
 fn write_audio<T: Sample>(
     out_data: &mut [f32],
     _: &cpal::OutputCallbackInfo,
-    buffer: &Arc<Mutex<Ringbuf>>,
+    buffer_mutex: &Arc<Mutex<Ringbuf>>,
 ) {
-    buffer.lock().unwrap().pop_slice(out_data);
+    let mut buffer = buffer_mutex.lock().unwrap();
+    if out_data.len() < buffer.len() {
+        buffer.pop_slice(out_data);
+    } else {
+        // uhhhh
+        println!("write_audio: buffer underrun!! (but no panic)");
+    }
+    if buffer.len() < 48000 * 2 - 1000 {
+        println!("write_audio: buffer has {} left", buffer.len());
+    }
 }

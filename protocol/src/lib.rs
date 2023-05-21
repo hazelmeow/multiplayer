@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod network;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum PlayingState {
     Playing,
     Paused,
