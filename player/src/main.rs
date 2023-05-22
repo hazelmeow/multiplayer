@@ -1,7 +1,7 @@
 use futures::StreamExt;
 use protocol::network::FrameStream;
-use protocol::{AudioFrame, AuthenticateRequest, GetInfo, Message, PlayingState};
-use std::collections::HashMap;
+use protocol::{AudioData, AuthenticateRequest, GetInfo, Message, Track};
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 
 use tokio::time::timeout;
@@ -11,14 +11,21 @@ mod audio;
 use audio::AudioReader;
 
 mod gui;
-use fltk::prelude::{InputExt, WidgetExt, BrowserExt};
+use fltk::prelude::{BrowserExt, InputExt, WidgetExt};
 
 struct Connection {
     stream: FrameStream,
     my_id: String,
-    
-    play_state: PlayState,
+
+    playing: Option<Track>,
+    queue: VecDeque<Track>,
     connected_users: HashMap<String, String>,
+
+    // we only need to use this once, when we first connect
+    // if we see the start message -> we are in sync
+    // if we see a frame without start message -> we need to catch up first
+    is_synced: bool,
+
     // network messages
     message_rx: mpsc::UnboundedReceiver<Message>,
     message_tx: mpsc::UnboundedSender<Message>,
@@ -28,6 +35,9 @@ struct Connection {
 
     // get status feedback from audio playing
     audio_status_rx: mpsc::UnboundedReceiver<AudioStatus>,
+
+    // controls transmitting thread
+    transmit_tx: mpsc::UnboundedSender<TransmitCommand>,
 
     // from ui to logic
     ui_tx: mpsc::UnboundedSender<UIEvent>,
@@ -83,74 +93,55 @@ impl Connection {
             .await
             .unwrap();
 
-        let (message_tx, mut message_rx) = mpsc::unbounded_channel::<Message>();
+        let (message_tx, message_rx) = mpsc::unbounded_channel::<Message>();
 
-        let (audio_tx, mut audio_rx) = std::sync::mpsc::channel::<AudioData>();
-
+        let (audio_tx, audio_rx) = std::sync::mpsc::channel::<AudioData>();
         let audio_status_rx = Self::run_audio(audio_rx);
 
-        let (ui_tx, mut ui_rx) = mpsc::unbounded_channel::<UIEvent>();
+        let (transmit_tx, transmit_rx) = mpsc::unbounded_channel::<TransmitCommand>();
+        Self::run_transmit(audio_tx.clone(), message_tx.clone(), transmit_rx);
 
-        /*
-        std::thread::spawn(move || loop {
-            let mut buf = String::new();
-            io::stdin().read_line(&mut buf).unwrap();
-
-            let line = buf.trim();
-            let r = if line == "q" {
-                Some(UIEvent::Quit)
-            } else if line == "gq" {
-                Some(UIEvent::GetInfo(GetInfo::QueueList))
-            } else if line == "aq" {
-                Some(UIEvent::TestAddQueue)
-            } else if line.starts_with("p ") {
-                let p = line.split_ascii_whitespace().nth(1);
-                if let Some(path) = p {
-                    Some(UIEvent::TestPlay(path.to_string()))
-                } else {
-                    None
-                }
-            } else if line.starts_with("c ") {
-                let mut c = line
-                    .split_ascii_whitespace()
-                    .into_iter()
-                    .collect::<Vec<&str>>();
-                if c.len() < 2 {
-                    None
-                } else {
-                    c.remove(0);
-                    let t = c.join(" ");
-                    Some(UIEvent::Test(t.to_string()))
-                }
-            } else {
-                println!("?");
-                None
-            };
-
-            if let Some(x) = r {
-                ui_tx.send(x).unwrap();
-            }
-        }); */
+        let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UIEvent>();
 
         stream
-            .send(&Message::GetInfo(GetInfo::QueueList))
+            .send(&Message::GetInfo(GetInfo::Queue))
             .await
             .unwrap();
 
         Ok(Self {
             stream,
             my_id: id.to_string(),
-            play_state: PlayState::Stopped,
+
+            playing: None,
+            queue: VecDeque::new(),
             connected_users: HashMap::new(),
+
+            is_synced: false,
+
             message_rx,
             message_tx,
             audio_tx,
             audio_status_rx,
+            transmit_tx,
             ui_rx,
             ui_tx,
             ui_sender,
         })
     }
+
+    // determine PlayState from playing/queue state
+    fn play_state(&self) -> PlayState {
+        if let Some(t) = &self.playing {
+            if t.owner == self.my_id {
+                PlayState::Transmitting
+            } else {
+                PlayState::Receiving
+            }
+        } else {
+            PlayState::Empty
+        }
+    }
+
     fn run_audio(
         audio_rx: std::sync::mpsc::Receiver<AudioData>,
     ) -> mpsc::UnboundedReceiver<AudioStatus> {
@@ -168,10 +159,10 @@ impl Connection {
                 match data {
                     AudioData::Frame(frame) => {
                         if frame.frame % 10 == 0 {
-                            //println!("player thread got frame {}", frame.frame);
                             tx.send(AudioStatus::Elapsed(p.get_seconds_elapsed()))
                                 .unwrap();
                         }
+
                         p.receive(frame.data);
                     }
                     AudioData::Start => {
@@ -184,6 +175,9 @@ impl Connection {
                     AudioData::Stop => {
                         p.pause();
                     }
+                    AudioData::Resume => {
+                        p.resume();
+                    }
                     AudioData::Finish => {
                         while !p.finish() {
                             println!("finishing.....");
@@ -192,97 +186,106 @@ impl Connection {
                         p.pause();
                         tx.send(AudioStatus::Finished).unwrap();
                     }
-                    AudioData::Shutdown => break,
                     AudioData::Clear => {
                         tx.send(AudioStatus::Elapsed(0)).unwrap();
                         p.clear();
                     }
+                    AudioData::Shutdown => break,
                 }
-                if p.ready() && wants_play {
-                    p.play();
+                if p.is_ready() && wants_play {
                     wants_play = false;
+
                     tx.send(AudioStatus::DoneBuffering).unwrap();
+
+                    if !p.is_started() {
+                        p.start()
+                    } else {
+                        p.resume()
+                    }
                 }
             }
         });
         return rx;
     }
-    async fn xmit_test(&mut self, path: String) -> bool {
-        /* let track = protocol::Track {
-            path: "blah".to_string(),
-            owner: self.my_id.clone(),
-            queue_position: 0,
-        };
 
-        self.stream.send(&Message::QueuePush(track)).await.unwrap();
-        self.stream
-            .send(&Message::GetInfo(GetInfo::QueueList))
-            .await
-            .unwrap(); */
-
-        // temporarily don't hear our own frames
-        let audio_tx_2 = self.audio_tx.clone();
-        let message_tx_2 = self.message_tx.clone();
-
-        let mut t: AudioReader = match AudioReader::load(&path) {
-            Ok(t) => t,
-            Err(_) => return false,
-        };
-
-        self.play_state = PlayState::Transmitting;
-
+    fn run_transmit(
+        audio_tx: std::sync::mpsc::Sender<AudioData>,
+        message_tx: tokio::sync::mpsc::UnboundedSender<Message>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<TransmitCommand>,
+    ) {
         tokio::spawn(async move {
-            audio_tx_2.send(AudioData::Clear).unwrap();
-            audio_tx_2.send(AudioData::Start).unwrap();
+            // helper to send to audio thread and other clients
+            let send_audio_data = move |data: AudioData| {
+                audio_tx.send(data.clone()).unwrap();
+                message_tx.send(Message::AudioData(data)).unwrap();
+            };
 
-            message_tx_2
-                .send(Message::PlayingState(PlayingState::Playing))
-                .unwrap();
+            let mut audio_reader: Option<AudioReader> = None;
 
+            // ok let's actually do the math for this
+            // each frame is 960 samples
+            // at 48k that means it's 20ms per frame
+            // SO we need to send a frame at least every 20ms.
+            // i think.................
+            // LOL OK it's two frames idk why maybe because it's stereo interleaved??????
             let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
+
             loop {
-                // ok let's actually do the math for this
-                // each frame is 960 samples
-                // at 48k that means it's 20ms per frame
-                // SO we need to send a frame at least every 20ms.
-                // i think.................
-                // LOL OK it's two frames idk why maybe because it's stereo interleaved??????
-                interval.tick().await;
+                tokio::select! {
+                    Some(cmd) = rx.recv() => {
+                        match cmd {
+                            TransmitCommand::Start(path) => {
+                                if audio_reader.is_some() {
+                                    eprintln!("TransmitCommand::Start failed, already transmitting?");
+                                    return;
+                                }
 
-                for _ in 0..20 {
-                    // stop in the middle of this "tick" of 20 frames
-                    if t.finished() {
-                        break;
-                    };
+                                if let Ok(r) = AudioReader::load(&path) {
+                                    audio_reader = Some(r);
 
-                    let f = t.encode_frame();
-                    if let Ok(frame) = f {
-                        audio_tx_2.send(AudioData::Frame(frame.clone())).unwrap();
-                        message_tx_2.send(Message::AudioFrame(frame)).unwrap();
-                    } else {
-                        break; // we're done i guess
+                                    send_audio_data(AudioData::Start);
+                                } else {
+                                    // failed to load file, need to skip it somehow?
+                                }
+                            }
+                        }
+                    }
+
+                    // tick loop
+                    _ = interval.tick() => {
+                        // TODO: only run the timer when we need it?
+                        if let Some(t) = audio_reader.as_mut() {
+                            for _ in 0..20 {
+                                // if ran out in the middle of this "tick" of 20 frames
+                                if t.finished() {
+                                    break;
+                                };
+
+                                let f = t.encode_frame();
+                                if let Ok(frame) = f {
+                                    send_audio_data(AudioData::Frame(frame));
+                                } else {
+                                    break; // we're done i guess
+                                }
+                            }
+
+                            // we encoded the entire file
+                            if t.finished() {
+                                send_audio_data(AudioData::Finish);
+
+                                audio_reader = None;
+                            };
+                        }
                     }
                 }
-
-                // we encoded the entire file
-                if t.finished() {
-                    break;
-                };
             }
-
-            audio_tx_2.send(AudioData::Finish).unwrap();
-            message_tx_2
-                .send(Message::PlayingState(PlayingState::Stopped))
-                .unwrap();
         });
-        return true
     }
 
     // lazy helper function
     fn ui_status(&mut self, text: &str) {
-        self.ui_sender.send(
-            UIEvent::Update(UIUpdateEvent::Status(text.to_string()))
-        );
+        self.ui_sender
+            .send(UIEvent::Update(UIUpdateEvent::Status(text.to_string())));
     }
 
     fn ui_status_default(&mut self) {
@@ -296,13 +299,6 @@ impl Connection {
             tokio::select! {
                 // something to send
                 Some(msg) = self.message_rx.recv() => {
-                    // temporary hack, we need another channel for this stuff
-                    if let Message::PlayingState(state) = &msg {
-                        if *state == PlayingState::Stopped {
-                            self.play_state = PlayState::Stopped;
-                        }
-                    }
-
                     self.stream.send(&msg).await.unwrap();
                 },
 
@@ -312,14 +308,23 @@ impl Connection {
                         self.ui_sender.send(UIEvent::Update(UIUpdateEvent::SetTime(line)));
                     }
                     AudioStatus::DoneBuffering => {
-                        self.ui_status(
-                            match self.play_state {
-                                PlayState::Transmitting => "Playing (transmitting)",
-                                PlayState::Receiving => "Playing (receiving from ...)",
-                                PlayState::Stopped => unreachable!(),
-
+                        match self.play_state() {
+                            PlayState::Transmitting => {
+                                self.ui_status(
+                                    "Playing (transmitting)",
+                                );
                             }
-                        );
+                            PlayState::Receiving => {
+                                if let Some(t) = &self.playing {
+                                    let owner = t.owner.to_owned();
+                                    self.ui_status(format!("Playing (receiving from {:?})", owner).as_str());
+                                } else {
+                                    //??
+                                    self.ui_status_default();
+                                }
+                            },
+                            PlayState::Empty => unreachable!(),
+                        }
                     }
                     AudioStatus::Finished => {
                         self.ui_status_default();
@@ -333,33 +338,56 @@ impl Connection {
                             bincode::deserialize(&bytes).expect("failed to deserialize message");
 
                         match msg {
-                            Message::AudioFrame(f) => {
-                                if self.play_state == PlayState::Receiving {
-                                    self.audio_tx.send(AudioData::Frame(f)).unwrap();
-                                } else {
-                                    // we're late.... try and catch up will you
-                                    self.play_state = PlayState::Receiving;
-                                    self.audio_tx.send(AudioData::StartLate(f.frame as usize)).unwrap();
-                                    self.audio_tx.send(AudioData::Frame(f)).unwrap();
+                            Message::Info(
+                                info
+                            ) => {
+                                match info {
+                                    protocol::Info::Queue(queue) => {
+                                        // TODO
+                                        println!("got queue: {:?}", queue);
+
+                                        self.queue = queue;
+                                    },
+                                    protocol::Info::Playing(playing) => {
+                                        // TODO
+                                        println!("got playing: {:?}", playing);
+
+                                        self.playing = playing.clone();
+
+                                        if let Some(t) = playing {
+                                            if t.owner == self.my_id {
+                                                self.transmit_tx.send(TransmitCommand::Start(t.path)).unwrap();
+                                            }
+                                        }
+                                    },
+                                    protocol::Info::ConnectedUsers(list) => {
+                                        self.connected_users = list;
+                                        self.ui_sender.send(UIEvent::Update(UIUpdateEvent::UpdateUserList(self.connected_users.clone())));
+                                    }
                                 }
+                            }
+                            Message::AudioData(data) => {
+                                match data {
+                                    protocol::AudioData::Frame(f) => {
+                                        if !self.is_synced {
+                                            // we're late.... try and catch up will you
+                                            self.is_synced = true;
+                                            self.audio_tx.send(AudioData::StartLate(f.frame as usize)).unwrap();
+                                        }
+
+                                        self.audio_tx.send(AudioData::Frame(f)).unwrap();
+                                    }
+                                    protocol::AudioData::Start => {
+                                        self.is_synced = true;
+                                        self.audio_tx.send(data).unwrap();
+                                    }
+                                    _ => {
+                                        // forward to audio thread
+                                        self.audio_tx.send(data).unwrap();
+                                    }
+                                }
+
                             },
-                            Message::PlayingState(s) => {
-                                match s {
-                                    PlayingState::Playing => {
-                                        self.play_state = PlayState::Receiving;
-                                        self.audio_tx.send(AudioData::Start).unwrap();
-                                    },
-                                    PlayingState::Stopped => {
-                                        self.play_state = PlayState::Stopped;
-                                        self.audio_tx.send(AudioData::Finish).unwrap();
-                                    },
-                                    _ => {}
-                                }
-                            }
-                            Message::ConnectedUsers(list) => {
-                                self.connected_users = list;
-                                self.ui_sender.send(UIEvent::Update(UIUpdateEvent::UpdateUserList(self.connected_users.clone())));
-                            }
 
                             _ => {
                                 println!("received message: {:?}", msg);
@@ -380,49 +408,24 @@ impl Connection {
                     match event {
                         UIEvent::Play(file) => {
                             // temporary api lol
-                            if self.play_state == PlayState::Stopped {
-                                // check what we're supposed to do?
-                                // really shouldn't the server keep track of this stuff.....
 
-                                // for now just send
-                                if self.xmit_test(file).await {
-                                    self.ui_status("Buffering...");
-                                }
-                            } else {
-                                // no-op.. either already transmitting or receiving
-                            }
+                            let track = protocol::Track {
+                                path: file,
+                                owner: self.my_id.clone(),
+                            };
+                            self.message_tx.send(Message::QueuePush(track)).unwrap();
                         }
                         UIEvent::Pause => {
 
                         }
                         UIEvent::Stop => {
-                            match self.play_state {
-                                PlayState::Receiving => {
-                                    // just stop caring about audioframes
-                                    self.play_state = PlayState::Stopped;
-                                },
-                                PlayState::Transmitting => {
-
-                                },
-                                PlayState::Stopped => {},
-                            };
-
+                            // send network message to stop?
                         }
                         UIEvent::Test(text) => {
                             self.message_tx.send(Message::Text(text)).unwrap();
                         },
                         UIEvent::GetInfo(i) => {
                             self.message_tx.send(Message::GetInfo(i)).unwrap();
-                        },
-                        UIEvent::TestAddQueue => {
-                            let track = protocol::Track {
-                                path: "blah".to_string(),
-                                owner: self.my_id.clone(), // temp
-                                queue_position: 0,
-                            };
-                            self.message_tx.send(Message::QueuePush(track)).unwrap();
-                            self.message_tx.send(Message::GetInfo(GetInfo::QueueList)).unwrap();
-                            // and uhh put it in idk
                         },
                         UIEvent::Quit => break,
                         _ => {}
@@ -434,7 +437,7 @@ impl Connection {
     }
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let my_id = args[1].clone();
@@ -444,6 +447,7 @@ async fn main() -> std::io::Result<()> {
     let connection = Connection::create("127.0.0.1:8080", &my_id.clone(), sender.clone())
         .await
         .unwrap();
+
     let mut ui_state = UIState { connection };
 
     let ui_tx = ui_state.connection.ui_tx.clone();
@@ -518,7 +522,6 @@ pub enum UIEvent {
     Pause,
     Test(String),
     GetInfo(GetInfo),
-    TestAddQueue,
     Quit,
 }
 
@@ -533,30 +536,21 @@ struct UIState {
     connection: Connection,
 }
 
-struct QueueItem {
-    track: protocol::Track,
-    player_id: usize,
-}
-enum AudioData {
-    Start,
-    StartLate(usize),
-    Frame(AudioFrame),
-    Stop,
-    Finish,
-    Clear,
-    Shutdown,
-}
-
 #[derive(Debug, Clone)]
 enum AudioStatus {
     Elapsed(usize),
     DoneBuffering,
-    Finished
+    Finished,
 }
 
 #[derive(Debug, PartialEq)]
 enum PlayState {
-    Stopped,
-    Receiving,
     Transmitting,
+    Receiving,
+    Empty,
+}
+
+#[derive(Debug, Clone)]
+enum TransmitCommand {
+    Start(String),
 }

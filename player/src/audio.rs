@@ -267,7 +267,9 @@ impl Player {
         }
     }
 
-    pub fn play(&mut self) {
+    pub fn start(&mut self) {
+        assert!(self.stream.is_none());
+
         println!("Initialising local audio...");
         let host = cpal::default_host();
         let device = host
@@ -326,7 +328,8 @@ impl Player {
     pub fn finish(&mut self) -> bool {
         {
             let buffer = self.buffer.lock().unwrap();
-            if buffer.len() > 1024 { // we will lose a tiny bit but
+            if buffer.len() > 1024 {
+                // we will lose a tiny bit but
                 return false;
             }
         }
@@ -334,7 +337,11 @@ impl Player {
         true
     }
 
-    pub fn ready(&self) -> bool {
+    pub fn is_started(&self) -> bool {
+        self.stream.is_some()
+    }
+
+    pub fn is_ready(&self) -> bool {
         let buffer = self.buffer.lock().unwrap();
         buffer.len() > 48000 * 2 // 2s...
     }

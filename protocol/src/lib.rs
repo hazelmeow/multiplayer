@@ -1,22 +1,8 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
 pub mod network;
-
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub enum PlayingState {
-    Playing,
-    Paused,
-    Stopped,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Track {
-    pub owner: String,
-    pub path: String,
-    pub queue_position: usize,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AudioFrame {
@@ -25,34 +11,54 @@ pub struct AudioFrame {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum AudioData {
+    Start,
+    StartLate(usize),
+    Frame(AudioFrame),
+    Stop,
+    Resume,
+    Finish,
+    Clear,
+    Shutdown,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Track {
+    pub owner: String,
+    pub path: String, // TODO: encrypt this??
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct AuthenticateRequest {
     pub id: String,
     pub name: String,
 }
 
-// server to client
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Message {
-    Handshake(String),
-    Authenticate(AuthenticateRequest),
-    PlayingState(PlayingState),
-    AudioFrame(AudioFrame),
-    Text(String),
-
-    GetInfo(GetInfo),
-    Info(Info),
-    QueuePush(Track),
-
+pub enum Info {
+    Playing(Option<Track>),
+    Queue(VecDeque<Track>),
     ConnectedUsers(HashMap<String, String>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Info {
-    QueueList(Vec<Track>),
+pub enum GetInfo {
+    Playing,
+    Queue,
+    ConnectedUsers,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum GetInfo {
-    QueueList,
-    PlayingState,
+pub enum Message {
+    Handshake(String),
+    Authenticate(AuthenticateRequest),
+
+    AudioData(AudioData),
+
+    Text(String),
+
+    QueuePush(Track),
+
+    GetInfo(GetInfo),
+    Info(Info),
 }

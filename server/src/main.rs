@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
 use protocol::network::FrameStream;
-use protocol::{Message, PlayingState, Track};
+use protocol::{Message, Track};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -43,8 +43,8 @@ struct Shared {
     peers: HashMap<String, Tx>, // map of mpsc channel senders
     peer_names: HashMap<String, String>,
 
-    queue: Vec<Track>,
-    playing_state: PlayingState,
+    playing: Option<Track>,
+    queue: VecDeque<Track>,
 }
 
 impl Shared {
@@ -52,8 +52,9 @@ impl Shared {
         Shared {
             peers: HashMap::new(),
             peer_names: HashMap::new(),
-            queue: vec![],
-            playing_state: PlayingState::Stopped,
+
+            playing: None,
+            queue: VecDeque::new(),
         }
     }
 
@@ -73,6 +74,19 @@ impl Shared {
                 }
             }
         }
+    }
+
+    fn playing_info(&self) -> Message {
+        Message::Info(protocol::Info::Playing(self.playing.clone()))
+    }
+
+    fn queue_info(&self) -> Message {
+        Message::Info(protocol::Info::Queue(self.queue.clone()))
+    }
+
+    fn connected_users_info(&self) -> Message {
+        let names = self.peer_names.clone();
+        Message::Info(protocol::Info::ConnectedUsers(names))
     }
 }
 
@@ -175,8 +189,15 @@ async fn handle_authenticated_connection(
     {
         let mut state = state.lock().await;
 
-        let names = state.peer_names.clone();
-        state.broadcast(&Message::ConnectedUsers(names)).await;
+        // notify everyone of the new ConnectedUsers list
+        let connected_users = state.connected_users_info();
+        state.broadcast(&connected_users).await;
+
+        // notify new peer of current playing track and queue
+        let playing = state.playing_info();
+        peer.stream.send(&playing).await.unwrap();
+        let queue = state.queue_info();
+        peer.stream.send(&queue).await.unwrap();
     }
 
     // process incoming messages until disconnected
@@ -219,24 +240,37 @@ async fn handle_message(
     m: &Message,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     match m {
-        Message::PlayingState(p) => {
-            println!("* {} - (id {}) playback state {:?}", peer.addr, peer.id, p);
+        Message::AudioData(data) => {
+            match data {
+                protocol::AudioData::Frame(_) => {} // dont log
+                _ => {
+                    println!("* {} - audio data {:?}", peer.addr, data);
+                }
+            }
 
-            // resend this message to all other peers
-            state.lock().await.broadcast_others(&peer, m).await;
+            let mut state = state.lock().await;
 
-            Ok(())
-        }
-        Message::AudioFrame(frame) => {
-            println!(
-                "* {} - audio frame [{}] with length {}",
-                peer.addr,
-                frame.frame,
-                frame.data.len()
-            );
+            match data {
+                // intercept Finish in case we want to actually just start the next song instead
+                protocol::AudioData::Finish => {
+                    let next_track = state.queue.pop_front();
+                    if let Some(track) = next_track {
+                        state.playing = Some(track);
 
-            // resend this message to all other peers
-            state.lock().await.broadcast_others(&peer, m).await;
+                        let p = state.playing_info();
+                        state.broadcast(&p).await;
+                        let q = state.queue_info();
+                        state.broadcast(&q).await;
+                    } else {
+                        // pass to rest
+                        state.broadcast_others(&peer, m).await;
+                    }
+                }
+                _ => {
+                    // resend other messages to all other peers
+                    state.broadcast_others(&peer, m).await;
+                }
+            }
 
             Ok(())
         }
@@ -244,34 +278,46 @@ async fn handle_message(
         Message::GetInfo(info) => {
             let state = state.lock().await;
             match info {
-                protocol::GetInfo::QueueList => {
-                    let m = Message::Info(protocol::Info::QueueList(state.queue.clone()));
+                protocol::GetInfo::Playing => {
+                    let m = state.playing_info();
                     peer.stream.send(&m).await?;
 
                     Ok(())
                 }
-                protocol::GetInfo::PlayingState => {
-                    let m = Message::PlayingState(state.playing_state.clone());
+                protocol::GetInfo::Queue => {
+                    let m = state.queue_info();
+                    peer.stream.send(&m).await?;
+
+                    Ok(())
+                }
+                protocol::GetInfo::ConnectedUsers => {
+                    let m = state.connected_users_info();
                     peer.stream.send(&m).await?;
 
                     Ok(())
                 }
             }
         }
+
         Message::QueuePush(track) => {
             let mut state = state.lock().await;
-            state.queue.push(track.to_owned());
-            let m = Message::Info(protocol::Info::QueueList(state.queue.clone()));
-            state.broadcast(&m).await;
 
-            state.playing_state = PlayingState::Playing;
+            // just play it now
+            if state.playing.is_none() {
+                state.playing = Some(track.to_owned());
 
-            let m = Message::PlayingState(state.playing_state.clone());
-            state.broadcast(&m).await;
+                let playing_msg = state.playing_info();
+                state.broadcast(&playing_msg).await;
+            } else {
+                state.queue.push_back(track.to_owned());
+            }
+
+            let queue_msg = state.queue_info();
+            state.broadcast(&queue_msg).await;
 
             Ok(())
         }
-        Message::Info(_) => todo!(),
+
         Message::Text(text) => {
             println!("* {} - '{}'", peer.addr, text);
             // resend this message to all other peers
@@ -282,7 +328,7 @@ async fn handle_message(
         // should not be reached
         Message::Handshake(_) => Ok(()),
         Message::Authenticate(_) => Ok(()),
-        Message::ConnectedUsers(_) => Ok(()),
+        Message::Info(_) => Ok(()),
     }
 }
 
@@ -291,6 +337,6 @@ async fn handle_disconnect(state: Arc<Mutex<Shared>>, peer: Peer) {
     state.peers.remove(&peer.id);
     state.peer_names.remove(&peer.id);
 
-    let names = state.peer_names.clone();
-    state.broadcast(&Message::ConnectedUsers(names)).await;
+    let msg = state.connected_users_info();
+    state.broadcast(&msg).await;
 }
