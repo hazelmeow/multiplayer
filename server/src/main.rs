@@ -266,8 +266,8 @@ async fn handle_message(
                         state.playing = None;
                         let p = state.playing_info();
                         state.broadcast(&p).await;
-                        
-                        state.broadcast_others(&peer, m).await;
+
+                        state.broadcast(m).await;
                     }
                 }
                 _ => {

@@ -174,7 +174,7 @@ impl AudioReader {
             if self.finished {
                 // if no more packets to read, pad with 0s until we reach input_frames_next
                 for chan in self.source_buffer.iter_mut() {
-                    println!("filling with 0s!!!");
+                    //println!("filling with 0s!!!");
                     chan.push_back(0.0);
                 }
             } else {
@@ -230,6 +230,10 @@ impl AudioReader {
 
     pub fn finished(&self) -> bool {
         self.finished
+    }
+
+    pub fn set_finished(&mut self) {
+        self.finished = true;
     }
 
 }

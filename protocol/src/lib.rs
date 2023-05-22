@@ -4,13 +4,13 @@ use serde::{Deserialize, Serialize};
 
 pub mod network;
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct AudioFrame {
     pub frame: u32,
     pub data: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum AudioData {
     Start,
     StartLate(usize),

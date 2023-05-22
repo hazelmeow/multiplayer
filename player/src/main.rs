@@ -13,7 +13,7 @@ mod audio;
 use audio::AudioReader;
 
 mod gui;
-use fltk::prelude::{BrowserExt, InputExt, WidgetExt, WidgetBase, WindowExt};
+use fltk::prelude::{BrowserExt, InputExt, WidgetBase, WidgetExt, WindowExt};
 
 struct Connection {
     stream: FrameStream,
@@ -169,6 +169,8 @@ impl Connection {
                     }
                     AudioData::Start => {
                         wants_play = true;
+                        p.fake_frames_received(0);
+                        tx.send(AudioStatus::Buffering).unwrap();
                     }
                     AudioData::StartLate(frame_id) => {
                         wants_play = true;
@@ -181,8 +183,8 @@ impl Connection {
                         p.resume();
                     }
                     AudioData::Finish => {
+                        println!("finishing.....");
                         while !p.finish() {
-                            println!("finishing.....");
                             std::thread::sleep(std::time::Duration::from_millis(20));
                         }
                         p.pause();
@@ -204,6 +206,8 @@ impl Connection {
                     } else {
                         p.resume()
                     }
+                } else if !p.is_ready() && wants_play && p.is_started() {
+                    tx.send(AudioStatus::DoneBuffering).unwrap();
                 }
             }
         });
@@ -217,6 +221,7 @@ impl Connection {
     ) {
         tokio::spawn(async move {
             // helper to send to audio thread and other clients
+            let message_tx_2 = message_tx.clone();
             let send_audio_data = move |data: AudioData| {
                 audio_tx.send(data.clone()).unwrap();
                 message_tx.send(Message::AudioData(data)).unwrap();
@@ -250,6 +255,12 @@ impl Connection {
                                     // failed to load file, need to skip it somehow?
                                 }
                             }
+                            TransmitCommand::Stop => {
+                                send_audio_data(AudioData::Finish);
+                                if let Some(t) = audio_reader.as_mut() {
+                                    t.set_finished();
+                                }
+                            }
                         }
                     }
 
@@ -273,7 +284,7 @@ impl Connection {
 
                             // we encoded the entire file
                             if t.finished() {
-                                send_audio_data(AudioData::Finish);
+                                message_tx_2.send(Message::AudioData(AudioData::Finish)).unwrap();
 
                                 audio_reader = None;
                             };
@@ -305,32 +316,40 @@ impl Connection {
                 },
 
                 // something from audio
-                Some(msg) = self.audio_status_rx.recv() => match msg {
-                    AudioStatus::Elapsed(secs) => {
-                        let line = format!("{:02}:{:02}/00:00", secs / 60, secs % 60);
-                        self.ui_sender.send(UIEvent::Update(UIUpdateEvent::SetTime(line)));
-                    }
-                    AudioStatus::DoneBuffering => {
-                        match self.play_state() {
-                            PlayState::Transmitting => {
-                                self.ui_status(
-                                    "Playing (transmitting)",
-                                );
-                            }
-                            PlayState::Receiving => {
-                                if let Some(t) = &self.playing {
-                                    let owner = t.owner.to_owned();
-                                    self.ui_status(format!("Playing (receiving from {:?})", owner).as_str());
-                                } else {
-                                    //??
-                                    self.ui_status_default();
-                                }
-                            },
-                            PlayState::Empty => unreachable!(),
+                Some(msg) = self.audio_status_rx.recv() => {
+                    dbg!(&msg);
+                    match msg {
+                        AudioStatus::Elapsed(secs) => {
+                            let line = format!("{:02}:{:02}/00:00", secs / 60, secs % 60);
+                            self.ui_sender.send(UIEvent::Update(UIUpdateEvent::SetTime(line)));
                         }
-                    }
-                    AudioStatus::Finished => {
-                        self.ui_status_default();
+                        AudioStatus::Buffering => {
+                            self.ui_status(
+                                "Buffering...",
+                            );
+                        }
+                        AudioStatus::DoneBuffering => {
+                            match self.play_state() {
+                                PlayState::Transmitting => {
+                                    self.ui_status(
+                                        "Playing (transmitting)",
+                                    );
+                                }
+                                PlayState::Receiving => {
+                                    if let Some(t) = &self.playing {
+                                        let owner = t.owner.to_owned();
+                                        self.ui_status(format!("Playing (receiving from {:?})", owner).as_str());
+                                    } else {
+                                        //??
+                                        self.ui_status_default();
+                                    }
+                                },
+                                PlayState::Empty => unreachable!(),
+                            }
+                        }
+                        AudioStatus::Finished => {
+                            self.ui_status_default();
+                        }
                     }
                 },
 
@@ -423,6 +442,12 @@ impl Connection {
                         }
                         UIEvent::Stop => {
                             // send network message to stop?
+                            match self.play_state() {
+                                PlayState::Transmitting => {
+                                    self.transmit_tx.send(TransmitCommand::Stop).unwrap();
+                                }
+                                _ => {}
+                            }
                         }
                         UIEvent::Test(text) => {
                             self.message_tx.send(Message::Text(text)).unwrap();
@@ -480,22 +505,22 @@ async fn main() -> std::io::Result<()> {
                     true
                 }
                 fltk::enums::Event::Drag => {
-                    if y < 20 {
-                        w.set_pos(app::event_x_root() - x, app::event_y_root() - y);
-                        true
-                    } else {
-                        false
-                    }
+                    //if y < 20 {
+                    w.set_pos(app::event_x_root() - x, app::event_y_root() - y);
+                    true
+                    //} else {
+                    //    false
+                    //}
                 }
                 _ => false,
             }
         });
 
-        queue_gui.main_win.show();
+        //queue_gui.main_win.show();
 
         while app.wait() {
             if let Some(msg) = receiver.recv() {
-                println!("got event from app: {:?}", msg);
+                //println!("got event from app: {:?}", msg);
                 ui_tx.send(msg.clone()).unwrap();
                 // only deal with ui-relevant stuff here
                 match msg {
@@ -534,6 +559,9 @@ async fn main() -> std::io::Result<()> {
                     },
                     UIEvent::BtnPlay => {
                         ui_tx.send(UIEvent::Play(gui.temp_input.value())).unwrap();
+                    }
+                    UIEvent::BtnStop => {
+                        ui_tx.send(UIEvent::Stop).unwrap();
                     }
                     UIEvent::BtnQueue => {
                         queue_gui.main_win.show();
@@ -591,6 +619,7 @@ struct UIState {
 #[derive(Debug, Clone)]
 enum AudioStatus {
     Elapsed(usize),
+    Buffering,
     DoneBuffering,
     Finished,
 }
@@ -605,4 +634,5 @@ enum PlayState {
 #[derive(Debug, Clone)]
 enum TransmitCommand {
     Start(String),
+    Stop,
 }
