@@ -1,3 +1,5 @@
+use fltk::app;
+use fltk::window::DoubleWindow;
 use futures::StreamExt;
 use protocol::network::FrameStream;
 use protocol::{AudioData, AuthenticateRequest, GetInfo, Message, Track};
@@ -11,7 +13,7 @@ mod audio;
 use audio::AudioReader;
 
 mod gui;
-use fltk::prelude::{BrowserExt, InputExt, WidgetExt};
+use fltk::prelude::{BrowserExt, InputExt, WidgetExt, WidgetBase, WindowExt};
 
 struct Connection {
     stream: FrameStream,
@@ -302,6 +304,7 @@ impl Connection {
                     self.stream.send(&msg).await.unwrap();
                 },
 
+                // something from audio
                 Some(msg) = self.audio_status_rx.recv() => match msg {
                     AudioStatus::Elapsed(secs) => {
                         let line = format!("{:02}:{:02}/00:00", secs / 60, secs % 60);
@@ -345,7 +348,7 @@ impl Connection {
                                     protocol::Info::Queue(queue) => {
                                         // TODO
                                         println!("got queue: {:?}", queue);
-
+                                        self.ui_sender.send(UIEvent::Update(UIUpdateEvent::UpdateQueue(self.playing.clone(), queue.clone())));
                                         self.queue = queue;
                                     },
                                     protocol::Info::Playing(playing) => {
@@ -460,9 +463,35 @@ async fn main() -> std::io::Result<()> {
         let theme = fltk_theme::ColorTheme::new(fltk_theme::color_themes::GRAY_THEME);
         theme.apply();
 
-        let mut gui = gui::UserInterface::make_window(sender.clone());
+        let mut gui = gui::MainWindow::make_window(sender.clone());
+        let mut queue_gui = gui::QueueWindow::make_window(sender.clone());
+
         gui.main_win.show();
         gui.main_win.emit(sender, UIEvent::Quit);
+
+        gui.main_win.handle({
+            let mut x = 0;
+            let mut y = 0;
+            move |w, ev| match ev {
+                fltk::enums::Event::Push => {
+                    let coords = app::event_coords();
+                    x = coords.0;
+                    y = coords.1;
+                    true
+                }
+                fltk::enums::Event::Drag => {
+                    if y < 20 {
+                        w.set_pos(app::event_x_root() - x, app::event_y_root() - y);
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            }
+        });
+
+        queue_gui.main_win.show();
 
         while app.wait() {
             if let Some(msg) = receiver.recv() {
@@ -488,12 +517,30 @@ async fn main() -> std::io::Result<()> {
                                 gui.users.add(&line);
                             }
                         }
+                        UIUpdateEvent::UpdateQueue(current, queue) => {
+                            queue_gui.queue_browser.clear();
+                            if let Some(track) = current {
+                                let line = format!("@b{}\t{}", track.owner, track.path);
+                                queue_gui.queue_browser.add(&line);
+                            }
+                            for track in queue {
+                                let line = format!("{}\t{}", track.owner, track.path);
+                                queue_gui.queue_browser.add(&line);
+                            }
+                        }
                         _ => {
                             dbg!(evt);
                         }
                     },
                     UIEvent::BtnPlay => {
                         ui_tx.send(UIEvent::Play(gui.temp_input.value())).unwrap();
+                    }
+                    UIEvent::BtnQueue => {
+                        queue_gui.main_win.show();
+                        //ui_tx.send(UIEvent::Update(UIUpdateEvent::UpdateQueue(self.queue.clone())));
+                    }
+                    UIEvent::HideQueue => {
+                        queue_gui.main_win.hide();
                     }
                     UIEvent::Quit => break,
                     UIEvent::Test(s) => {
@@ -516,12 +563,16 @@ async fn main() -> std::io::Result<()> {
 #[derive(Debug, Clone)]
 pub enum UIEvent {
     BtnPlay, // bleh
+    BtnStop,
+    BtnPause,
+    BtnQueue,
     Update(UIUpdateEvent),
     Play(String),
     Stop,
     Pause,
     Test(String),
     GetInfo(GetInfo),
+    HideQueue,
     Quit,
 }
 
@@ -529,6 +580,7 @@ pub enum UIEvent {
 pub enum UIUpdateEvent {
     SetTime(String),
     UpdateUserList(HashMap<String, String>),
+    UpdateQueue(Option<Track>, VecDeque<Track>),
     Status(String),
 }
 

@@ -263,6 +263,10 @@ async fn handle_message(
                         state.broadcast(&q).await;
                     } else {
                         // pass to rest
+                        state.playing = None;
+                        let p = state.playing_info();
+                        state.broadcast(&p).await;
+                        
                         state.broadcast_others(&peer, m).await;
                     }
                 }
