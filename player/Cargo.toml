@@ -10,10 +10,13 @@ tokio = { version = "1.28.1", features = ["macros", "rt-multi-thread", "io-util"
 protocol = { path = "../protocol" }
 futures = "0.3.28"
 bincode = "1.3.3"
-symphonia = { version = "0.5.2", features = ["mp3"] }
+symphonia = { version = "0.5.2", features = ["all-codecs"] }
 opus = "0.3.0"
 rubato = "0.12.0"
 ringbuf = "0.3.3"
 hound = "3.5.0"
 fltk = "1.4.3"
 fltk-theme = "0.7.0"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser", "dwmapi"] }

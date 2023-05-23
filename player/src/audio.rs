@@ -4,14 +4,14 @@ use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
 use opus::{Decoder, Encoder};
-use protocol::AudioFrame;
+use protocol::{AudioFrame, TrackMetadata};
 use ringbuf::{LocalRb, Rb};
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
+use symphonia::core::meta::{MetadataOptions, StandardTagKey, Metadata};
 use symphonia::core::probe::{Hint, ProbeResult};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -28,7 +28,8 @@ pub struct AudioReader {
 
     source_buffer: Vec<VecDeque<f32>>,
 
-    position: usize, // we might not actually need this for anything now?
+    position: usize,
+    duration: u64,
     finished: bool,
 
     sample_rate: u32,
@@ -39,57 +40,9 @@ impl AudioReader {
     pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
         let src = std::fs::File::open(path)?;
 
-        let mss = MediaSourceStream::new(Box::new(src), Default::default());
+        let (mut probe_result, mut decoder) = Self::new_decoder(src);
 
-        let hint = Hint::new();
-
-        let probe_result = symphonia::default::get_probe()
-            .format(
-                &hint,
-                mss,
-                &FormatOptions {
-                    enable_gapless: true,
-                    ..FormatOptions::default()
-                },
-                &MetadataOptions::default(),
-            )
-            .unwrap();
-
-        let mut decoder = symphonia::default::get_codecs()
-            .make(
-                &probe_result
-                    .format
-                    .default_track()
-                    .expect("uhhhh")
-                    .codec_params,
-                &DecoderOptions::default(),
-            )
-            .unwrap();
-
-        // read 1 packet to check the sample rate and channel count
-        // TODO: there HAS to be a better way than opening the file twice
-        let (sample_rate, channel_count) = {
-            let src2 = std::fs::File::open(path)?;
-            let mss2 = MediaSourceStream::new(Box::new(src2), Default::default());
-
-            let mut temp_probe = symphonia::default::get_probe()
-                .format(
-                    &hint,
-                    mss2,
-                    &FormatOptions {
-                        enable_gapless: true,
-                        ..FormatOptions::default()
-                    },
-                    &MetadataOptions::default(),
-                )
-                .unwrap();
-
-            let packet = temp_probe.format.next_packet().unwrap();
-            let decoded = decoder.decode(&packet).unwrap();
-            let spec = *decoded.spec();
-
-            (spec.rate, spec.channels.count())
-        };
+        let (sample_rate, channel_count, duration, _) = Self::load_info(path, &mut decoder)?;
 
         let resampler = {
             let params = InterpolationParameters {
@@ -109,9 +62,9 @@ impl AudioReader {
             .unwrap()
         };
 
-        let encoder =
+        let mut encoder =
             opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
-        //encoder.set_bitrate(opus::Bitrate::Bits(256)).unwrap();
+        encoder.set_bitrate(opus::Bitrate::Bits(256000)).unwrap();
 
         Ok(Self {
             probe_result,
@@ -122,11 +75,125 @@ impl AudioReader {
             source_buffer: vec![VecDeque::new(); channel_count],
 
             position: 0,
+            duration,
             finished: false,
 
             sample_rate,
             channel_count,
         })
+    }
+
+    pub fn load_info(
+        path: &str,
+        decoder: &mut Box<dyn symphonia::core::codecs::Decoder>,
+    ) -> Result<(u32, usize, u64, TrackMetadata), Box<dyn Error>> {
+        // read 1 packet to check the sample rate and channel count
+        // TODO: there HAS to be a better way than opening the file twice
+        // TODO: there is.. it's ur job to clean all of this up now :3 (sorry)
+        let src2 = std::fs::File::open(path)?;
+        let mss2 = MediaSourceStream::new(Box::new(src2), Default::default());
+
+        let mut temp_probe = symphonia::default::get_probe()
+            .format(
+                &Hint::new(),
+                mss2,
+                &FormatOptions {
+                    enable_gapless: true,
+                    ..FormatOptions::default()
+                },
+                &MetadataOptions::default(),
+            )
+            .unwrap();
+
+        let packet = temp_probe.format.next_packet().unwrap();
+        let decoded = decoder.decode(&packet).unwrap();
+        let spec = *decoded.spec();
+
+        // TODO: maybe cache this somewhere? idk
+        let mut duration = 0;
+        while let Ok(packet) = temp_probe.format.next_packet() {
+            duration += packet.dur;
+        }
+
+        let mut track_md = TrackMetadata::default();
+
+        track_md.duration = (duration as f64 / spec.rate as f64) as usize;
+
+        let mut md = temp_probe.format.metadata();
+        if let Some(current) = md.skip_to_latest() {
+            dbg!(current.tags());
+            dbg!(current.vendor_data());
+    
+            let tags = current.tags();
+            Self::fill_metadata(&mut track_md, tags);
+        } else if let Some(mut md) = temp_probe.metadata.get() {
+            let tags = md.skip_to_latest().unwrap().tags();
+            Self::fill_metadata(&mut track_md, tags);
+        }
+         else {
+            println!("really no metadata to speak of...");
+        }
+        
+
+        Ok((spec.rate, spec.channels.count(), duration, track_md))
+    }
+
+    // hazel's favorite calling pattern
+    fn fill_metadata(md: &mut TrackMetadata, tags: &[symphonia::core::meta::Tag]) {
+        for tag in tags {
+            match tag.std_key {
+                Some(StandardTagKey::TrackTitle) => {
+                    md.title = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::Album) => {
+                    md.album = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::Artist) => {
+                    md.artist = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::TrackNumber) => {
+                    md.track_no = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::AlbumArtist) => {
+                    md.album_artist = Some(tag.value.to_string());
+                }
+
+                _ => {}
+            }
+        }
+    }
+
+    pub fn new_decoder(
+        src: std::fs::File,
+    ) -> (ProbeResult, Box<dyn symphonia::core::codecs::Decoder>) {
+        let mss = MediaSourceStream::new(Box::new(src), Default::default());
+
+        let hint = Hint::new();
+
+        let probe_result = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions {
+                    enable_gapless: true,
+                    ..FormatOptions::default()
+                },
+                &MetadataOptions::default(),
+            )
+            .unwrap();
+
+        let decoder = symphonia::default::get_codecs()
+            .make(
+                &probe_result
+                    .format
+                    .default_track()
+                    .expect("uhhhh")
+                    .codec_params,
+                &DecoderOptions::default(),
+            )
+            .unwrap();
+
+        (probe_result, decoder)
     }
 
     // sets self.finished if the end was reached
@@ -235,7 +302,6 @@ impl AudioReader {
     pub fn set_finished(&mut self) {
         self.finished = true;
     }
-
 }
 
 pub struct Player {
@@ -374,7 +440,7 @@ fn write_audio<T: Sample>(
         // uhhhh
         println!("write_audio: buffer underrun!! (but no panic)");
     }
-    if buffer.len() < 48000 * 2 - 1000 {
+    if buffer.len() < 48000 * 2 - 10000 {
         println!("write_audio: buffer has {} left", buffer.len());
     }
 }

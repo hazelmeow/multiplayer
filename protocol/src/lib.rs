@@ -26,6 +26,17 @@ pub enum AudioData {
 pub struct Track {
     pub owner: String,
     pub path: String, // TODO: encrypt this??
+    pub metadata: TrackMetadata,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct TrackMetadata {
+    pub duration: usize,
+    pub track_no: Option<String>,
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -39,6 +50,8 @@ pub enum Info {
     Playing(Option<Track>),
     Queue(VecDeque<Track>),
     ConnectedUsers(HashMap<String, String>),
+    TrackDuration(u64),
+    TrackTitle(String),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

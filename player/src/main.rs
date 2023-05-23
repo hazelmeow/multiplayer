@@ -5,6 +5,8 @@ use protocol::network::FrameStream;
 use protocol::{AudioData, AuthenticateRequest, GetInfo, Message, Track};
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
+use std::path::PathBuf;
+use tokio::sync::mpsc::UnboundedSender;
 
 use tokio::time::timeout;
 use tokio::{net::TcpStream, sync::mpsc};
@@ -13,7 +15,7 @@ mod audio;
 use audio::AudioReader;
 
 mod gui;
-use fltk::prelude::{BrowserExt, InputExt, WidgetBase, WidgetExt, WindowExt};
+use fltk::prelude::{BrowserExt, InputExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 
 struct Connection {
     stream: FrameStream,
@@ -317,11 +319,16 @@ impl Connection {
 
                 // something from audio
                 Some(msg) = self.audio_status_rx.recv() => {
-                    dbg!(&msg);
+                    //dbg!(&msg);
                     match msg {
                         AudioStatus::Elapsed(secs) => {
-                            let line = format!("{:02}:{:02}/00:00", secs / 60, secs % 60);
-                            self.ui_sender.send(UIEvent::Update(UIUpdateEvent::SetTime(line)));
+                            let total = match &self.playing {
+                                Some(t) => {
+                                    t.metadata.duration
+                                },
+                                None => 0
+                            };
+                            self.ui_sender.send(UIEvent::Update(UIUpdateEvent::SetTime(secs, total)));
                         }
                         AudioStatus::Buffering => {
                             self.ui_status(
@@ -386,6 +393,7 @@ impl Connection {
                                         self.connected_users = list;
                                         self.ui_sender.send(UIEvent::Update(UIUpdateEvent::UpdateUserList(self.connected_users.clone())));
                                     }
+                                    _ => {}
                                 }
                             }
                             Message::AudioData(data) => {
@@ -428,14 +436,24 @@ impl Connection {
                 // some ui event
                 Some(event) = self.ui_rx.recv() => {
                     match event {
-                        UIEvent::Play(file) => {
+                        UIEvent::Play(path) => {
                             // temporary api lol
+                            // can open?
+                            // TODO: this blocks and fucks everything up if it takes too long to read....
+                            self.ui_status("Loading file...");
+                            let file = path.into_os_string().into_string().unwrap();
+                            if let Ok(f) = std::fs::File::open(&file) {
+                                let (_, mut decoder) = AudioReader::new_decoder(f);
+                                if let Ok((_, _, _, metadata)) = AudioReader::load_info(&file, &mut decoder) {
+                                    let track = protocol::Track {
+                                        path: file,
+                                        owner: self.my_id.clone(),
+                                        metadata
+                                    };
+                                    self.message_tx.send(Message::QueuePush(track)).unwrap();
+                                }
+                            }
 
-                            let track = protocol::Track {
-                                path: file,
-                                owner: self.my_id.clone(),
-                            };
-                            self.message_tx.send(Message::QueuePush(track)).unwrap();
                         }
                         UIEvent::Pause => {
 
@@ -491,32 +509,90 @@ async fn main() -> std::io::Result<()> {
         let mut gui = gui::MainWindow::make_window(sender.clone());
         let mut queue_gui = gui::QueueWindow::make_window(sender.clone());
 
+        // stuff for cool custom titlebars
+        gui.main_win.set_border(false);
         gui.main_win.show();
+        gui.fix_taskbar_after_show();
+
         gui.main_win.emit(sender, UIEvent::Quit);
 
-        gui.main_win.handle({
-            let mut x = 0;
-            let mut y = 0;
-            move |w, ev| match ev {
-                fltk::enums::Event::Push => {
-                    let coords = app::event_coords();
-                    x = coords.0;
-                    y = coords.1;
-                    true
-                }
-                fltk::enums::Event::Drag => {
-                    //if y < 20 {
-                    w.set_pos(app::event_x_root() - x, app::event_y_root() - y);
-                    true
-                    //} else {
-                    //    false
-                    //}
-                }
-                _ => false,
+        let mut x = 0;
+        let mut y = 0;
+        let mut dnd = false;
+        let mut released = false;
+
+        let mut mover = move |w: &mut DoubleWindow, ev, tx: UnboundedSender<UIEvent>| match ev {
+            fltk::enums::Event::Push => {
+                let coords = app::event_coords();
+                x = coords.0;
+                y = coords.1;
+                true
             }
+            fltk::enums::Event::Drag => {
+                //if y < 20 {
+                w.set_pos(app::event_x_root() - x, app::event_y_root() - y);
+                true
+                //} else {
+                //    false
+                //}
+            }
+            fltk::enums::Event::DndEnter => {
+                println!("blah");
+                dnd = true;
+                true
+            }
+            fltk::enums::Event::DndDrag => true,
+            fltk::enums::Event::DndRelease => {
+                released = true;
+                true
+            }
+            fltk::enums::Event::Paste => {
+                if dnd && released {
+                    let path = app::event_text();
+                    let path = path.trim();
+                    let path = path.replace("file://", "");
+                    let path = std::path::PathBuf::from(&path);
+                    if path.exists() {
+                        // we use a timeout to avoid pasting the path into the buffer
+                        app::add_timeout3(0.0, {
+                            move |_| {
+                                println!("got dropped file {:?}", path);
+                                tx.send(UIEvent::Play(path.clone())).unwrap();
+                            }
+                        });
+                    }
+                    dnd = false;
+                    released = false;
+                    true
+                } else {
+                    println!("paste");
+                    false
+                }
+            }
+            fltk::enums::Event::DndLeave => {
+                dnd = false;
+                released = false;
+                true
+            }
+            _ => false,
+        };
+
+        // this is REALLY silly but we need to make sure to make enough
+        // of these things so the closure won't complain
+
+        let ui_tx2 = ui_tx.clone();
+
+        gui.main_win.handle(move |w, ev| {
+            let ui_tx3 = ui_tx2.clone();
+            mover(w, ev, ui_tx3)
         });
 
-        //queue_gui.main_win.show();
+        let ui_tx2 = ui_tx.clone(); // reusing the same name,
+
+        queue_gui.main_win.handle(move |w, ev| {
+            let ui_tx3 = ui_tx2.clone();
+            mover(w, ev, ui_tx3)
+        });
 
         while app.wait() {
             if let Some(msg) = receiver.recv() {
@@ -525,8 +601,11 @@ async fn main() -> std::io::Result<()> {
                 // only deal with ui-relevant stuff here
                 match msg {
                     UIEvent::Update(evt) => match evt {
-                        UIUpdateEvent::SetTime(val) => {
-                            gui.lbl_time.set_label(&val);
+                        UIUpdateEvent::SetTime(elapsed, total) => {
+                            // TODO: switch between elapsed and remaining on there
+                            gui.lbl_time.set_label(&min_secs(elapsed));
+                            let progress = elapsed as f64 / total as f64;
+                            gui.seek_bar.set_value(progress);
                         }
                         UIUpdateEvent::Status(val) => {
                             gui.status_field.set_label(&val);
@@ -541,25 +620,64 @@ async fn main() -> std::io::Result<()> {
                                 };
                                 gui.users.add(&line);
                             }
+                            gui.status_right_display.set_label(&format!(
+                                "U{} Q{}",
+                                gui.users.size(),
+                                queue_gui.queue_browser.size(),
+                            ));
                         }
                         UIUpdateEvent::UpdateQueue(current, queue) => {
                             queue_gui.queue_browser.clear();
+                            // TODO: metadata stuff here is TOO LONG AND ANNOYING
                             if let Some(track) = current {
-                                let line = format!("@b{}\t{}", track.owner, track.path);
+                                let line = format!(
+                                    "@b{}\t[{}] {}",
+                                    track.owner,
+                                    min_secs(track.metadata.duration),
+                                    track
+                                        .metadata
+                                        .title
+                                        .as_ref()
+                                        .unwrap_or(&"[no title]".to_string())
+                                );
                                 queue_gui.queue_browser.add(&line);
+                                // also update display
+
+                                gui.lbl_title.set_label(
+                                    track
+                                        .metadata
+                                        .title
+                                        .as_ref()
+                                        .unwrap_or(&"[no title]".to_string()),
+                                );
+                                gui.lbl_data1.set_label(
+                                    track
+                                        .metadata
+                                        .artist
+                                        .as_ref()
+                                        .unwrap_or(&"[unknown artist]".to_string()),
+                                )
                             }
                             for track in queue {
-                                let line = format!("{}\t{}", track.owner, track.path);
+                                let line = format!(
+                                    "{}\t[{}] {}",
+                                    track.owner,
+                                    min_secs(track.metadata.duration),
+                                    track.metadata.title.unwrap_or("[no title]".to_string())
+                                );
                                 queue_gui.queue_browser.add(&line);
                             }
+                            gui.status_right_display.set_label(&format!(
+                                "U{} Q{}",
+                                gui.users.size(),
+                                queue_gui.queue_browser.size(),
+                            ));
                         }
                         _ => {
                             dbg!(evt);
                         }
                     },
-                    UIEvent::BtnPlay => {
-                        ui_tx.send(UIEvent::Play(gui.temp_input.value())).unwrap();
-                    }
+                    UIEvent::BtnPlay => {}
                     UIEvent::BtnStop => {
                         ui_tx.send(UIEvent::Stop).unwrap();
                     }
@@ -572,7 +690,7 @@ async fn main() -> std::io::Result<()> {
                     }
                     UIEvent::Quit => break,
                     UIEvent::Test(s) => {
-                        dbg!(gui.temp_input.value());
+                        //dbg!(gui.temp_input.value());
                     }
                     _ => {}
                 }
@@ -595,7 +713,7 @@ pub enum UIEvent {
     BtnPause,
     BtnQueue,
     Update(UIUpdateEvent),
-    Play(String),
+    Play(PathBuf),
     Stop,
     Pause,
     Test(String),
@@ -606,7 +724,7 @@ pub enum UIEvent {
 
 #[derive(Debug, Clone)]
 pub enum UIUpdateEvent {
-    SetTime(String),
+    SetTime(usize, usize),
     UpdateUserList(HashMap<String, String>),
     UpdateQueue(Option<Track>, VecDeque<Track>),
     Status(String),
@@ -635,4 +753,8 @@ enum PlayState {
 enum TransmitCommand {
     Start(String),
     Stop,
+}
+
+fn min_secs(secs: usize) -> String {
+    format!("{:02}:{:02}", secs / 60, secs % 60)
 }
