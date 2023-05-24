@@ -15,7 +15,7 @@ mod audio;
 use audio::AudioReader;
 
 mod gui;
-use fltk::prelude::{BrowserExt, InputExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
+use fltk::prelude::{BrowserExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 
 struct Connection {
     stream: FrameStream,
@@ -444,7 +444,7 @@ impl Connection {
                             let file = path.into_os_string().into_string().unwrap();
                             if let Ok(f) = std::fs::File::open(&file) {
                                 let (_, mut decoder) = AudioReader::new_decoder(f);
-                                if let Ok((_, _, _, metadata)) = AudioReader::load_info(&file, &mut decoder) {
+                                if let Ok((_, _, _, metadata)) = AudioReader::load_info(&file, &mut decoder, true) {
                                     let track = protocol::Track {
                                         path: file,
                                         owner: self.my_id.clone(),

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{VecDeque};
 use std::error::Error;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
@@ -11,7 +11,7 @@ use symphonia::core::codecs::DecoderOptions;
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::{MetadataOptions, StandardTagKey, Metadata};
+use symphonia::core::meta::{MetadataOptions, StandardTagKey};
 use symphonia::core::probe::{Hint, ProbeResult};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -29,7 +29,6 @@ pub struct AudioReader {
     source_buffer: Vec<VecDeque<f32>>,
 
     position: usize,
-    duration: u64,
     finished: bool,
 
     sample_rate: u32,
@@ -42,7 +41,7 @@ impl AudioReader {
 
         let (mut probe_result, mut decoder) = Self::new_decoder(src);
 
-        let (sample_rate, channel_count, duration, _) = Self::load_info(path, &mut decoder)?;
+        let (sample_rate, channel_count, _, _) = Self::load_info(path, &mut decoder, false)?;
 
         let resampler = {
             let params = InterpolationParameters {
@@ -75,7 +74,6 @@ impl AudioReader {
             source_buffer: vec![VecDeque::new(); channel_count],
 
             position: 0,
-            duration,
             finished: false,
 
             sample_rate,
@@ -86,6 +84,7 @@ impl AudioReader {
     pub fn load_info(
         path: &str,
         decoder: &mut Box<dyn symphonia::core::codecs::Decoder>,
+        calculate_duration: bool
     ) -> Result<(u32, usize, u64, TrackMetadata), Box<dyn Error>> {
         // read 1 packet to check the sample rate and channel count
         // TODO: there HAS to be a better way than opening the file twice
@@ -111,8 +110,10 @@ impl AudioReader {
 
         // TODO: maybe cache this somewhere? idk
         let mut duration = 0;
-        while let Ok(packet) = temp_probe.format.next_packet() {
-            duration += packet.dur;
+        if calculate_duration {
+            while let Ok(packet) = temp_probe.format.next_packet() {
+                duration += packet.dur;
+            }
         }
 
         let mut track_md = TrackMetadata::default();
