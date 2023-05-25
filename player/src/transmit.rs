@@ -359,7 +359,7 @@ impl TransmitThread {
         // SO we need to send a frame at least every 20ms.
         // i think.................
         // LOL OK it's two frames idk why maybe because it's stereo interleaved??????
-        let interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
+        let interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
 
         TransmitThread {
             rx,
@@ -414,7 +414,7 @@ impl TransmitThread {
     fn handle_tick(&mut self) {
         // TODO: only run the timer when we need it?
         if let Some(t) = self.audio_reader.as_mut() {
-            for _ in 0..20 {
+            for _ in 0..10 {
                 // if ran out in the middle of this "tick" of 20 frames
                 if t.finished() {
                     break;

@@ -229,8 +229,6 @@ impl Connection {
                     } else {
                         p.resume()
                     }
-                } else if !p.is_ready() && wants_play && p.is_started() {
-                    tx.send(AudioStatus::DoneBuffering).unwrap();
                 }
             }
         });
@@ -619,9 +617,24 @@ async fn main() -> std::io::Result<()> {
                             dbg!(evt);
                         }
                     },
-                    UIEvent::BtnPlay => {}
+                    UIEvent::BtnPlay => {
+                        // play button behaviour:
+                        // if stopped and queue is empty, ask for file
+                        // if stopped and queue has songs, tell it to play
+                        // if already playing, do nothing
+
+                    }
                     UIEvent::BtnStop => {
                         ui_tx.send(UIEvent::Stop).unwrap();
+                    }
+                    UIEvent::BtnPause => {
+
+                    }
+                    UIEvent::BtnNext => {
+
+                    }
+                    UIEvent::BtnPrev => {
+
                     }
                     UIEvent::BtnQueue => {
                         queue_gui.main_win.show();
@@ -653,6 +666,8 @@ pub enum UIEvent {
     BtnPlay, // bleh
     BtnStop,
     BtnPause,
+    BtnNext,
+    BtnPrev,
     BtnQueue,
     Update(UIUpdateEvent),
     Play(PathBuf),
