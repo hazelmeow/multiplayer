@@ -469,18 +469,13 @@ async fn main() -> std::io::Result<()> {
             }
             fltk::enums::Event::Paste => {
                 if dnd && released {
-                    let path = app::event_text();
-                    let path = path.trim();
-                    let path = path.replace("file://", "");
-                    let path = std::path::PathBuf::from(&path);
-                    if path.exists() {
-                        // we use a timeout to avoid pasting the path into the buffer
-                        app::add_timeout3(0.0, {
-                            move |_| {
-                                println!("got dropped file {:?}", path);
-                                tx.send(UIEvent::Play(path.clone())).unwrap();
-                            }
-                        });
+                    for path in app::event_text().split("\n") {
+                        let path = path.trim().replace("file://", "");
+                        let path = std::path::PathBuf::from(&path);
+
+                        if path.exists() {
+                            tx.send(UIEvent::Play(path.clone())).unwrap();
+                        }
                     }
                     dnd = false;
                     released = false;
