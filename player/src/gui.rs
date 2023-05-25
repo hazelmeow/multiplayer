@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use fltk::app::Sender;
 use fltk::browser::*;
 use fltk::button::*;
@@ -12,6 +15,8 @@ use fltk::image::PngImage;
 use fltk::input::*;
 use fltk::prelude::*;
 use fltk::valuator::*;
+use fltk::widget;
+use fltk::widget_extends;
 use fltk::window::*;
 
 use crate::main;
@@ -26,6 +31,7 @@ pub struct MainWindow {
     pub lbl_time: Frame,
     pub lbl_title: Frame,
     pub lbl_data1: Frame,
+    pub visualizer: Visualizer,
 }
 impl MainWindow {
     pub fn make_window(s: Sender<UIEvent>) -> Self {
@@ -148,6 +154,10 @@ impl MainWindow {
         lbl_time.set_align(Align::Left | Align::Inside);
         //main_win.add(&lbl_time);
 
+        let mut visualizer = Visualizer::new(19, 60);
+        visualizer.update_values([0, 1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3]);
+        display.add(&*visualizer);
+
         display.end();
         main_win.add(&display);
 
@@ -165,7 +175,6 @@ impl MainWindow {
         btn_queue.emit(s.clone(), UIEvent::BtnQueue);
         main_win.add(&btn_queue);
 
-
         main_win.end();
 
         Self {
@@ -177,6 +186,7 @@ impl MainWindow {
             lbl_time,
             lbl_title,
             lbl_data1,
+            visualizer
         }
     }
 
@@ -245,7 +255,7 @@ impl QueueWindow {
 
         let mut queue_browser =
             SelectBrowser::new(10, 24, main_grp.width() - 20, main_grp.height() - 40, "");
-        
+
         main_grp.add(&queue_browser);
 
         let mut btns_grp = Group::new(10, main_grp.height() - 15, 10, 10, "");
@@ -289,6 +299,56 @@ fn create_horizontal_gradient_frame(
         }
     });
     frame
+}
+
+pub struct Visualizer {
+    inner: widget::Widget,
+    values: Rc<RefCell<[u8; 14]>>, // 14 bars (height 0 to 8)
+}
+
+widget_extends!(Visualizer, widget::Widget, inner);
+
+impl Visualizer {
+    pub fn new(x: i32, y: i32) -> Self {
+        let mut inner = widget::Widget::default().with_size(41, 20).with_pos(x, y);
+        inner.set_frame(FrameType::FlatBox);
+
+        let values = [5; 14];
+        let values = Rc::from(RefCell::from(values));
+        let v = values.clone();
+
+        inner.draw(move |i| {
+            draw::draw_box(i.frame(), i.x(), i.y(), i.w(), i.h(), i.color());
+            draw::set_draw_color(Color::Black);
+            draw::draw_xyline(i.x(), i.y() + 16, i.x() + (14 * 3) - 2);
+            for bar in 0..14 {
+                let value = v.borrow()[bar] as i32;
+                for val in 0..value {
+                    let x = i.x() + bar as i32 * 3;
+                    let y = i.y() + (7 - val) * 2;
+                    draw::draw_xyline(x, y, x + 1);
+                }
+            }
+        });
+
+        Self { inner, values }
+    }
+    pub fn update_values(&mut self, values: [u8; 14]) {
+        {
+            let prev = self.values.borrow().clone();
+            let mut sv = self.values.borrow_mut();
+            for i in 0..14 {
+                if values[i] > prev[i] {
+                    sv[i] = ((prev[i] as usize + 2*values[i] as usize) / 3 as usize) as u8;
+                } else if sv[i] > 1 {
+                    sv[i] = sv[i] - 1;
+                } else {
+                    sv[i] = 0;
+                }
+            }
+        }
+        self.redraw();
+    }
 }
 
 use winapi::shared::windef::HWND;

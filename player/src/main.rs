@@ -178,6 +178,17 @@ impl Connection {
                         }
 
                         p.receive(frame.data);
+                        if p.frames_received % 5 == 0 {
+                            // visualization buffer ready
+                            let samples = p.get_visualizer_buffer();
+                            let mut samples = samples.lock().unwrap();
+                            if samples.len() < 20 {
+                                continue;
+                            }
+                            let bars = audio::calculate_visualizer(&samples.remove(0));
+                            tx.send(AudioStatus::Visualizer(bars)).unwrap();
+
+                        }
                     }
                     AudioData::Start => {
                         wants_play = true;
@@ -285,6 +296,9 @@ impl Connection {
                         }
                         AudioStatus::Finished => {
                             self.ui_status_default();
+                        }
+                        AudioStatus::Visualizer(bars) => {
+                            self.ui_sender.send(UIEvent::Update(UIUpdateEvent::Visualizer(bars)))
                         }
                     }
                 },
@@ -532,6 +546,9 @@ async fn main() -> std::io::Result<()> {
                             let progress = elapsed as f64 / total as f64;
                             gui.seek_bar.set_value(progress);
                         }
+                        UIUpdateEvent::Visualizer(bars) => {
+                            gui.visualizer.update_values(bars);
+                        }
                         UIUpdateEvent::Status(val) => {
                             gui.status_field.set_label(&val);
                         }
@@ -653,6 +670,7 @@ pub enum UIUpdateEvent {
     UpdateUserList(HashMap<String, String>),
     UpdateQueue(Option<Track>, VecDeque<Track>),
     Status(String),
+    Visualizer([u8; 14]),
 }
 
 struct UIState {
@@ -665,6 +683,7 @@ enum AudioStatus {
     Buffering,
     DoneBuffering,
     Finished,
+    Visualizer([u8; 14]),
 }
 
 #[derive(Debug, PartialEq)]

@@ -6,6 +6,9 @@ use cpal::{Sample, Stream};
 use opus::Decoder;
 use ringbuf::{LocalRb, Rb};
 
+use spectrum_analyzer;
+use spectrum_analyzer::scaling::{divide_by_N_sqrt, scale_to_zero_to_one, scale_20_times_log10};
+
 type Ringbuf<T> = LocalRb<T, Vec<MaybeUninit<T>>>;
 
 const PLAYER_BUFFER_SIZE: usize = 48000 * 10; // 10s of samples?
@@ -14,7 +17,8 @@ pub struct Player {
     decoder: Decoder,
     buffer: Arc<Mutex<Ringbuf<f32>>>,
     stream: Option<Stream>,
-    frames_received: usize,
+    pub frames_received: usize,
+    visualizer_buffer: Arc<Mutex<Vec<[f32; 480 * 5]>>>, // :3
 }
 impl Player {
     pub fn new() -> Self {
@@ -23,13 +27,14 @@ impl Player {
             buffer: Arc::new(Mutex::new(Ringbuf::<f32>::new(PLAYER_BUFFER_SIZE))),
             stream: None,
             frames_received: 0,
+            visualizer_buffer: Arc::new(Mutex::new(vec![])),
         }
     }
 
     // decode opus data when received and buffer the samples
     pub fn receive(&mut self, frame: Vec<u8>) {
         // allocate and decode into here
-        let mut pcm = vec![0.0; 960];
+        let mut pcm = [0.0; 960];
         self.decoder.decode_float(&frame, &mut pcm, false).unwrap();
         self.frames_received += 1;
 
@@ -40,6 +45,21 @@ impl Player {
         } else {
             // otherwise just discard i guess
             println!("player buffer full... discarding :/")
+        }
+
+        let chunk = self.frames_received % 5;
+        let mut buf = self.visualizer_buffer.lock().unwrap();
+        let bl = buf.len();
+
+        if chunk == 0 || bl == 0 {
+            buf.push([0.0;480*5]);
+        }
+
+        let bl = buf.len();
+
+        for (i, s) in pcm.iter().step_by(2).enumerate() {
+            let summed = s + pcm[i + 1] / 2.0;
+            buf[bl-1][chunk + i] = summed;
         }
     }
 
@@ -127,6 +147,10 @@ impl Player {
     pub fn fake_frames_received(&mut self, frames: usize) {
         self.frames_received = frames;
     }
+    pub fn get_visualizer_buffer(&mut self) -> Arc<Mutex<Vec<[f32; 480 * 5]>>> {
+        assert!(self.frames_received % 5 == 0);
+        self.visualizer_buffer.clone()
+    }
 }
 
 // callback when the audio output needs more data
@@ -149,4 +173,47 @@ fn write_audio<T: Sample>(
     if buffer.len() < 48000 * 2 - 10000 {
         println!("write_audio: buffer has {} left", buffer.len());
     }
+}
+
+pub fn calculate_visualizer(samples: &[f32; 2400]) -> [u8; 14] {
+    let samples_truncated = &samples[..2048];
+    let hamming_window = spectrum_analyzer::windows::hann_window(samples_truncated);
+    let spectrum = spectrum_analyzer::samples_fft_to_spectrum(
+        &hamming_window,
+        48000,
+        spectrum_analyzer::FrequencyLimit::All,
+        Some(&scale_to_zero_to_one),
+    )
+    .unwrap();
+
+    let mut bars_float = [0.0; 14];
+    let min_freq = 20.0;
+    let max_freq = 20000.0;
+
+    for (fr, fr_val) in spectrum.data().iter() {
+        let fr = fr.val();
+        if fr < 25.0 {
+            continue;
+        }
+
+        let index = (-5.25062 * fr.log(0.06) - 7.56997).round().min(13.0) as usize;
+        //println!("{}, {}, {}", index, fr);
+        let lmao = if fr < 200.0 {
+            3.0
+        } else if fr < 500.0 {
+            2.0
+        } else {
+            1.0
+        };
+        bars_float[index] += fr_val.val() * lmao;
+    }
+    //println!("{:?}", bars_float);
+    let bars: [u8; 14] = bars_float
+        .iter()
+        .map(|&num| (num as f32 / 2.0).round().min(8.0) as u8)
+        .collect::<Vec<u8>>()
+        .try_into()
+        .unwrap();
+    //println!("{:?}", bars);
+    bars
 }
