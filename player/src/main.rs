@@ -537,7 +537,7 @@ async fn main() -> std::io::Result<()> {
                                 gui.users.add(&line);
                             }
                             gui.status_right_display.set_label(&format!(
-                                "U{} Q{}",
+                                "U{:0>2} Q{:0>2}",
                                 gui.users.size(),
                                 queue_gui.queue_browser.size(),
                             ));
@@ -584,7 +584,7 @@ async fn main() -> std::io::Result<()> {
                                 queue_gui.queue_browser.add(&line);
                             }
                             gui.status_right_display.set_label(&format!(
-                                "U{} Q{}",
+                                "U{:0>2} Q{:0>2}",
                                 gui.users.size(),
                                 queue_gui.queue_browser.size(),
                             ));

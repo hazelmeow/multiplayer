@@ -111,7 +111,7 @@ impl MainWindow {
             status_field.y(),
             status_field.width() - 4,
             status_field.height(),
-            "U02 Q12",
+            "U.. Q..",
         );
         status_right_display.set_label_size(10);
         status_right_display.set_frame(FrameType::NoBox);
