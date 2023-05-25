@@ -12,10 +12,9 @@ use tokio::time::timeout;
 use tokio::{net::TcpStream, sync::mpsc};
 
 mod audio;
-use audio::AudioReader;
 
 mod transmit;
-use transmit::{TransmitCommand, TransmitThread, TransmitThreadHandle};
+use transmit::{AudioInfoReader, TransmitCommand, TransmitThread, TransmitThreadHandle};
 
 mod gui;
 use fltk::prelude::{BrowserExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
@@ -364,18 +363,18 @@ impl Connection {
                             // TODO: this blocks and fucks everything up if it takes too long to read....
                             self.ui_status("Loading file...");
                             let file = path.into_os_string().into_string().unwrap();
-                            if let Ok(f) = std::fs::File::open(&file) {
-                                let (_, mut decoder) = AudioReader::new_decoder(f);
-                                if let Ok((_, _, _, metadata)) = AudioReader::load_info(&file, &mut decoder, true) {
+
+                            if let Ok(mut reader) = AudioInfoReader::load(&file) {
+                                if let Ok((_, _, metadata)) = reader.read_info(true) {
                                     let track = protocol::Track {
                                         path: file,
                                         owner: self.my_id.clone(),
                                         metadata
                                     };
+
                                     self.message_tx.send(Message::QueuePush(track)).unwrap();
                                 }
                             }
-
                         }
                         UIEvent::Pause => {
 

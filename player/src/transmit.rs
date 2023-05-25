@@ -1,7 +1,299 @@
-use protocol::{AudioData, Message};
+use std::collections::VecDeque;
+use std::error::Error;
+
+use opus::Encoder;
+use rubato::{InterpolationParameters, Resampler, SincFixedOut};
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::{Decoder, DecoderOptions};
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::{MetadataOptions, StandardTagKey};
+use symphonia::core::probe::{Hint, ProbeResult};
 use tokio::time::Interval;
 
-use crate::audio::AudioReader;
+use protocol::{AudioData, Message};
+use protocol::{AudioFrame, TrackMetadata};
+
+pub struct AudioInfoReader {
+    probe_result: ProbeResult,
+    decoder: Box<dyn Decoder>,
+}
+
+impl AudioInfoReader {
+    pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
+        let src = std::fs::File::open(path)?;
+
+        let mss = MediaSourceStream::new(Box::new(src), Default::default());
+
+        let hint = Hint::new();
+
+        let probe_result = symphonia::default::get_probe()
+            .format(
+                &hint,
+                mss,
+                &FormatOptions {
+                    enable_gapless: true,
+                    ..FormatOptions::default()
+                },
+                &MetadataOptions::default(),
+            )
+            .unwrap();
+
+        let decoder = symphonia::default::get_codecs()
+            .make(
+                &probe_result
+                    .format
+                    .default_track()
+                    .expect("uhhhh")
+                    .codec_params,
+                &DecoderOptions::default(),
+            )
+            .unwrap();
+
+        Ok(AudioInfoReader {
+            probe_result,
+            decoder,
+        })
+    }
+
+    pub fn read_info(
+        &mut self,
+        calculate_duration: bool,
+    ) -> Result<(u32, usize, TrackMetadata), Box<dyn Error>> {
+        // read 1 packet to check the sample rate and channel count
+        let packet = self.probe_result.format.next_packet()?;
+        let decoded = self.decoder.decode(&packet)?;
+        let spec = *decoded.spec();
+
+        // maybe check the duration
+        let mut duration = 0;
+        if calculate_duration {
+            while let Ok(packet) = self.probe_result.format.next_packet() {
+                duration += packet.dur;
+            }
+        }
+
+        // seek back to start since we consumed packets
+        self.probe_result.format.seek(
+            SeekMode::Accurate,
+            SeekTo::Time {
+                time: symphonia::core::units::Time::new(0, 0.0),
+                track_id: None,
+            },
+        )?;
+        self.decoder.reset();
+
+        // read track metadata
+        let mut track_md = TrackMetadata::default();
+
+        track_md.duration = (duration as f64 / spec.rate as f64) as usize;
+
+        let mut md = self.probe_result.format.metadata();
+        if let Some(current) = md.skip_to_latest() {
+            let tags = current.tags();
+            Self::fill_metadata(&mut track_md, tags);
+        } else if let Some(mut md) = self.probe_result.metadata.get() {
+            let tags = md.skip_to_latest().unwrap().tags();
+            Self::fill_metadata(&mut track_md, tags);
+        } else {
+            println!("really no metadata to speak of...");
+        }
+
+        Ok((spec.rate, spec.channels.count(), track_md))
+    }
+
+    fn fill_metadata(md: &mut TrackMetadata, tags: &[symphonia::core::meta::Tag]) {
+        for tag in tags {
+            match tag.std_key {
+                Some(StandardTagKey::TrackTitle) => {
+                    md.title = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::Album) => {
+                    md.album = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::Artist) => {
+                    md.artist = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::TrackNumber) => {
+                    md.track_no = Some(tag.value.to_string());
+                }
+                Some(StandardTagKey::AlbumArtist) => {
+                    md.album_artist = Some(tag.value.to_string());
+                }
+
+                _ => {}
+            }
+        }
+    }
+}
+
+pub struct AudioReader {
+    inner: AudioInfoReader,
+
+    resampler: SincFixedOut<f32>,
+    encoder: Encoder,
+
+    source_buffer: Vec<VecDeque<f32>>,
+
+    position: usize,
+    finished: bool,
+
+    sample_rate: u32,
+    channel_count: usize,
+}
+
+impl AudioReader {
+    pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
+        let mut info_reader = AudioInfoReader::load(path)?;
+
+        let (sample_rate, channel_count, _) = info_reader.read_info(false)?;
+
+        let resampler = {
+            let params = InterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: rubato::InterpolationType::Linear,
+                oversampling_factor: 256,
+                window: rubato::WindowFunction::BlackmanHarris2,
+            };
+            SincFixedOut::<f32>::new(
+                48000 as f64 / sample_rate as f64,
+                1.0,
+                params,
+                480,
+                channel_count,
+            )
+            .unwrap()
+        };
+
+        let mut encoder =
+            opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
+        encoder.set_bitrate(opus::Bitrate::Bits(256000)).unwrap();
+
+        Ok(Self {
+            inner: info_reader,
+
+            resampler,
+            encoder,
+
+            source_buffer: vec![VecDeque::new(); channel_count],
+
+            position: 0,
+            finished: false,
+
+            sample_rate,
+            channel_count,
+        })
+    }
+
+    // sets self.finished if the end was reached
+    fn read_more(&mut self) -> Result<(), Box<dyn Error>> {
+        match self.inner.probe_result.format.next_packet() {
+            Ok(packet) => {
+                let decoded = self.inner.decoder.decode(&packet).unwrap();
+                let spec = *decoded.spec();
+
+                if decoded.frames() > 0 {
+                    let mut sample_buffer: SampleBuffer<f32> =
+                        SampleBuffer::new(decoded.frames() as u64, spec);
+
+                    sample_buffer.copy_interleaved_ref(decoded);
+
+                    let samples = sample_buffer.samples();
+
+                    for frame in samples.chunks(spec.channels.count()) {
+                        for (chan, sample) in frame.iter().enumerate() {
+                            self.source_buffer[chan].push_back(*sample)
+                        }
+                    }
+                } else {
+                    eprintln!("Empty packet encountered while loading song!");
+                }
+            }
+            Err(SymphoniaError::IoError(_)) => {
+                // no more packets
+                self.finished = true;
+            }
+            Err(e) => return Err("failed to parse track".into()),
+        }
+
+        Ok(())
+    }
+
+    fn resample_more(&mut self) -> Result<Vec<f32>, Box<dyn Error>> {
+        let samples_needed = if self.sample_rate != 48000 {
+            self.resampler.input_frames_next()
+        } else {
+            480 as usize
+        };
+
+        while self.source_buffer[0].len() < samples_needed {
+            if self.finished {
+                // if no more packets to read, pad with 0s until we reach input_frames_next
+                for chan in self.source_buffer.iter_mut() {
+                    //println!("filling with 0s!!!");
+                    chan.push_back(0.0);
+                }
+            } else {
+                self.read_more()?;
+            }
+        }
+
+        let mut chunk_samples: Vec<Vec<f32>> = vec![Vec::new(); self.channel_count];
+
+        for (chan_idx, chan) in self.source_buffer.iter_mut().enumerate() {
+            for _ in 0..samples_needed {
+                // maybe there's a better way to do this?
+                chunk_samples[chan_idx].push(chan.pop_front().unwrap());
+            }
+        }
+
+        // resample to standard 48000 if needed
+        let samples_correct_rate = if self.sample_rate != 48000 {
+            self.resampler.process(&chunk_samples, None).unwrap()
+        } else {
+            chunk_samples
+        };
+
+        // now we have to interleave it since we had to use the resampling thing
+        let samples: Vec<f32> = samples_correct_rate[0]
+            .chunks(1)
+            .zip(samples_correct_rate[1].chunks(1))
+            .flat_map(|(a, b)| a.into_iter().chain(b))
+            .copied()
+            .collect();
+
+        Ok(samples)
+    }
+
+    pub fn encode_frame(&mut self) -> Result<AudioFrame, ()> {
+        const PCM_LENGTH: usize = 960;
+
+        let mut pcm = [0.0; PCM_LENGTH];
+
+        let resampled = self.resample_more().unwrap();
+        for i in 0..PCM_LENGTH {
+            pcm[i] = resampled[i];
+        }
+
+        let x = self.encoder.encode_vec_float(&pcm, 256).unwrap();
+        self.position += 1;
+
+        Ok(AudioFrame {
+            frame: self.position as u32,
+            data: x,
+        })
+    }
+
+    pub fn finished(&self) -> bool {
+        self.finished
+    }
+
+    pub fn set_finished(&mut self) {
+        self.finished = true;
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum TransmitCommand {
@@ -89,14 +381,9 @@ impl TransmitThread {
     async fn run(&mut self) {
         loop {
             tokio::select! {
-                Some(cmd) = self.rx.recv() => {
-                    self.handle_command(cmd)
-                }
+                Some(cmd) = self.rx.recv() => self.handle_command(cmd),
 
-                // tick loop
-                _ = self.interval.tick() => {
-                    self.handle_tick();
-                }
+                _ = self.interval.tick() => self.handle_tick(),
             }
         }
     }
