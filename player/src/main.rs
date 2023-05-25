@@ -14,6 +14,9 @@ use tokio::{net::TcpStream, sync::mpsc};
 mod audio;
 use audio::AudioReader;
 
+mod transmit;
+use transmit::{TransmitCommand, TransmitThread, TransmitThreadHandle};
+
 mod gui;
 use fltk::prelude::{BrowserExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 
@@ -30,6 +33,8 @@ struct Connection {
     // if we see a frame without start message -> we need to catch up first
     is_synced: bool,
 
+    transmit: TransmitThreadHandle,
+
     // network messages
     message_rx: mpsc::UnboundedReceiver<Message>,
     message_tx: mpsc::UnboundedSender<Message>,
@@ -39,9 +44,6 @@ struct Connection {
 
     // get status feedback from audio playing
     audio_status_rx: mpsc::UnboundedReceiver<AudioStatus>,
-
-    // controls transmitting thread
-    transmit_tx: mpsc::UnboundedSender<TransmitCommand>,
 
     // from ui to logic
     ui_tx: mpsc::UnboundedSender<UIEvent>,
@@ -102,8 +104,8 @@ impl Connection {
         let (audio_tx, audio_rx) = std::sync::mpsc::channel::<AudioData>();
         let audio_status_rx = Self::run_audio(audio_rx);
 
-        let (transmit_tx, transmit_rx) = mpsc::unbounded_channel::<TransmitCommand>();
-        Self::run_transmit(audio_tx.clone(), message_tx.clone(), transmit_rx);
+        let (transmit_tx, transmit_rx) = tokio::sync::mpsc::unbounded_channel::<TransmitCommand>();
+        let transmit = TransmitThread::spawn(transmit_tx, transmit_rx, &message_tx, &audio_tx);
 
         let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UIEvent>();
 
@@ -122,11 +124,12 @@ impl Connection {
 
             is_synced: false,
 
+            transmit,
+
             message_rx,
             message_tx,
             audio_tx,
             audio_status_rx,
-            transmit_tx,
             ui_rx,
             ui_tx,
             ui_sender,
@@ -214,87 +217,6 @@ impl Connection {
             }
         });
         return rx;
-    }
-
-    fn run_transmit(
-        audio_tx: std::sync::mpsc::Sender<AudioData>,
-        message_tx: tokio::sync::mpsc::UnboundedSender<Message>,
-        mut rx: tokio::sync::mpsc::UnboundedReceiver<TransmitCommand>,
-    ) {
-        tokio::spawn(async move {
-            // helper to send to audio thread and other clients
-            let message_tx_2 = message_tx.clone();
-            let send_audio_data = move |data: AudioData| {
-                audio_tx.send(data.clone()).unwrap();
-                message_tx.send(Message::AudioData(data)).unwrap();
-            };
-
-            let mut audio_reader: Option<AudioReader> = None;
-
-            // ok let's actually do the math for this
-            // each frame is 960 samples
-            // at 48k that means it's 20ms per frame
-            // SO we need to send a frame at least every 20ms.
-            // i think.................
-            // LOL OK it's two frames idk why maybe because it's stereo interleaved??????
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(200));
-
-            loop {
-                tokio::select! {
-                    Some(cmd) = rx.recv() => {
-                        match cmd {
-                            TransmitCommand::Start(path) => {
-                                if audio_reader.is_some() {
-                                    eprintln!("TransmitCommand::Start failed, already transmitting?");
-                                    return;
-                                }
-
-                                if let Ok(r) = AudioReader::load(&path) {
-                                    audio_reader = Some(r);
-
-                                    send_audio_data(AudioData::Start);
-                                } else {
-                                    // failed to load file, need to skip it somehow?
-                                }
-                            }
-                            TransmitCommand::Stop => {
-                                send_audio_data(AudioData::Finish);
-                                if let Some(t) = audio_reader.as_mut() {
-                                    t.set_finished();
-                                }
-                            }
-                        }
-                    }
-
-                    // tick loop
-                    _ = interval.tick() => {
-                        // TODO: only run the timer when we need it?
-                        if let Some(t) = audio_reader.as_mut() {
-                            for _ in 0..20 {
-                                // if ran out in the middle of this "tick" of 20 frames
-                                if t.finished() {
-                                    break;
-                                };
-
-                                let f = t.encode_frame();
-                                if let Ok(frame) = f {
-                                    send_audio_data(AudioData::Frame(frame));
-                                } else {
-                                    break; // we're done i guess
-                                }
-                            }
-
-                            // we encoded the entire file
-                            if t.finished() {
-                                message_tx_2.send(Message::AudioData(AudioData::Finish)).unwrap();
-
-                                audio_reader = None;
-                            };
-                        }
-                    }
-                }
-            }
-        });
     }
 
     // lazy helper function
@@ -385,7 +307,7 @@ impl Connection {
 
                                         if let Some(t) = playing {
                                             if t.owner == self.my_id {
-                                                self.transmit_tx.send(TransmitCommand::Start(t.path)).unwrap();
+                                                self.transmit.send(TransmitCommand::Start(t.path)).unwrap();
                                             }
                                         }
                                     },
@@ -462,7 +384,7 @@ impl Connection {
                             // send network message to stop?
                             match self.play_state() {
                                 PlayState::Transmitting => {
-                                    self.transmit_tx.send(TransmitCommand::Stop).unwrap();
+                                    self.transmit.send(TransmitCommand::Stop).unwrap();
                                 }
                                 _ => {}
                             }
@@ -747,12 +669,6 @@ enum PlayState {
     Transmitting,
     Receiving,
     Empty,
-}
-
-#[derive(Debug, Clone)]
-enum TransmitCommand {
-    Start(String),
-    Stop,
 }
 
 fn min_secs(secs: usize) -> String {
