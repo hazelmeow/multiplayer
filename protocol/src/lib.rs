@@ -25,7 +25,7 @@ pub enum AudioData {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
     pub owner: String,
-    pub path: String, // TODO: encrypt this??
+    pub path: Vec<u8>,
     pub metadata: TrackMetadata,
 }
 

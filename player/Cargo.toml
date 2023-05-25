@@ -17,6 +17,8 @@ ringbuf = "0.3.3"
 hound = "3.5.0"
 fltk = "1.4.3"
 fltk-theme = "0.7.0"
+aes-gcm-siv = "0.11.1"
+hex = "0.4.3"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser", "dwmapi"] }
