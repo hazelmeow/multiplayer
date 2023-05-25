@@ -291,7 +291,7 @@ impl Connection {
                                         self.ui_status_default();
                                     }
                                 },
-                                PlayState::Empty => unreachable!(),
+                                PlayState::Empty => unreachable!("done buffering when playstate empty"),
                             }
                         }
                         AudioStatus::Finished => {
@@ -388,7 +388,7 @@ impl Connection {
                             let file = path.into_os_string().into_string().unwrap();
 
                             if let Ok(mut reader) = AudioInfoReader::load(&file) {
-                                if let Ok((_, _, metadata)) = reader.read_info(true) {
+                                if let Ok((_, _, metadata)) = reader.read_info() {
                                     let track = protocol::Track {
                                         path: self.encrypt_path(file).unwrap(),
                                         owner: self.my_id.clone(),

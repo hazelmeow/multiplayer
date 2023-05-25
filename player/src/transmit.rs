@@ -57,22 +57,20 @@ impl AudioInfoReader {
         })
     }
 
-    pub fn read_info(
-        &mut self,
-        calculate_duration: bool,
-    ) -> Result<(u32, usize, TrackMetadata), Box<dyn Error>> {
+    pub fn read_info(&mut self) -> Result<(u32, usize, TrackMetadata), Box<dyn Error>> {
         // read 1 packet to check the sample rate and channel count
         let packet = self.probe_result.format.next_packet()?;
         let decoded = self.decoder.decode(&packet)?;
         let spec = *decoded.spec();
 
-        // maybe check the duration
-        let mut duration = 0;
-        if calculate_duration {
-            while let Ok(packet) = self.probe_result.format.next_packet() {
-                duration += packet.dur;
-            }
-        }
+        let duration = self
+            .probe_result
+            .format
+            .default_track()
+            .unwrap()
+            .codec_params
+            .n_frames
+            .unwrap_or(0);
 
         // seek back to start since we consumed packets
         self.probe_result.format.seek(
@@ -147,7 +145,7 @@ impl AudioReader {
     pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
         let mut info_reader = AudioInfoReader::load(path)?;
 
-        let (sample_rate, channel_count, _) = info_reader.read_info(false)?;
+        let (sample_rate, channel_count, _) = info_reader.read_info()?;
 
         let resampler = {
             let params = InterpolationParameters {
