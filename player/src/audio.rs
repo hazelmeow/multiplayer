@@ -151,6 +151,21 @@ impl Player {
         assert!(self.frames_received % 5 == 0);
         self.visualizer_buffer.clone()
     }
+    pub fn buffer_status(&self) -> u8 {
+        let buffer = self.buffer.lock().unwrap();
+        match buffer.len() / 12000 {
+            // quarter-seconds of buffer
+            // ...not the most linear scale of all time
+            0 => 0,       // empty
+            1..=2 => 1,   // 0.25 to 0.5s
+            3..=4 => 2,   // 0.75 to 1s
+            5..=6 => 3,   // 1.25 to 1.5s
+            7..=12 => 4,  // 1.75 to 3s
+            13..=19 => 5, // 3.25 to 4.75s
+            20..=24 => 6, // 5 to 6s
+            _ => 7,       // and beyond
+        }
+    }
 }
 
 // callback when the audio output needs more data

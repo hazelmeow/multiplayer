@@ -175,6 +175,7 @@ impl Connection {
                         if frame.frame % 10 == 0 {
                             tx.send(AudioStatus::Elapsed(p.get_seconds_elapsed()))
                                 .unwrap();
+                            tx.send(AudioStatus::Buffer(p.buffer_status())).unwrap();
                         }
 
                         p.receive(frame.data);
@@ -297,6 +298,9 @@ impl Connection {
                         }
                         AudioStatus::Visualizer(bars) => {
                             self.ui_sender.send(UIEvent::Update(UIUpdateEvent::Visualizer(bars)))
+                        }
+                        AudioStatus::Buffer(val) => {
+                            self.ui_sender.send(UIEvent::Update(UIUpdateEvent::Buffer(val)))
                         }
                     }
                 },
@@ -531,6 +535,10 @@ async fn main() -> std::io::Result<()> {
             mover(w, ev, ui_tx3)
         });
 
+        // TODO: we'd probably have to communicate this somehow
+        //       for now just pretend
+        gui.bitrate_bar.update_bitrate(256);
+
         while app.wait() {
             if let Some(msg) = receiver.recv() {
                 //println!("got event from app: {:?}", msg);
@@ -546,6 +554,12 @@ async fn main() -> std::io::Result<()> {
                         }
                         UIUpdateEvent::Visualizer(bars) => {
                             gui.visualizer.update_values(bars);
+                        }
+                        UIUpdateEvent::Buffer(val) => {
+                            gui.bitrate_bar.update_buffer_level(val);
+                        }
+                        UIUpdateEvent::Bitrate(val) => {
+                            gui.bitrate_bar.update_bitrate(val);
                         }
                         UIUpdateEvent::Status(val) => {
                             gui.status_field.set_label(&val);
@@ -686,6 +700,8 @@ pub enum UIUpdateEvent {
     UpdateQueue(Option<Track>, VecDeque<Track>),
     Status(String),
     Visualizer([u8; 14]),
+    Buffer(u8),
+    Bitrate(usize),
 }
 
 struct UIState {
@@ -699,6 +715,7 @@ enum AudioStatus {
     DoneBuffering,
     Finished,
     Visualizer([u8; 14]),
+    Buffer(u8),
 }
 
 #[derive(Debug, PartialEq)]
