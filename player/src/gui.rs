@@ -191,7 +191,7 @@ impl MainWindow {
             lbl_title,
             lbl_data1,
             visualizer,
-            bitrate_bar
+            bitrate_bar,
         }
     }
 
@@ -309,6 +309,8 @@ fn create_horizontal_gradient_frame(
 pub struct Visualizer {
     inner: widget::Widget,
     values: Rc<RefCell<[u8; 14]>>, // 14 bars (height 0 to 8)
+    prev_vals: [u8; 14],
+    timing: bool,
 }
 
 widget_extends!(Visualizer, widget::Widget, inner);
@@ -336,21 +338,31 @@ impl Visualizer {
             }
         });
 
-        Self { inner, values }
+        Self {
+            inner,
+            values,
+            timing: false,
+            prev_vals: [0;14],
+        }
     }
     pub fn update_values(&mut self, values: [u8; 14]) {
         {
             let prev = self.values.borrow().clone();
             let mut sv = self.values.borrow_mut();
+            let temp = sv.clone();
             for i in 0..14 {
                 if values[i] > prev[i] {
-                    sv[i] = ((prev[i] as usize + 2*values[i] as usize) / 3 as usize) as u8;
+                    sv[i] = ((prev[i] as usize + self.prev_vals[i] as usize + values[i] as usize) / 3 as usize) as u8;
                 } else if sv[i] > 1 {
-                    sv[i] = sv[i] - 1;
+                    if self.timing {
+                        sv[i] = sv[i] - 1;
+                    }
                 } else {
                     sv[i] = 0;
                 }
             }
+            self.timing = !self.timing;
+            self.prev_vals = temp;
         }
         self.redraw();
     }
@@ -421,7 +433,7 @@ impl BitrateBar {
             '8' => (54, 6),
             '9' => (61, 6),
             'k' => (68, 19), // "kbps"
-            _ => (0,0)
+            _ => (0, 0),
         }
     }
     pub fn update_bitrate(&mut self, bitrate: usize) {
@@ -433,8 +445,6 @@ impl BitrateBar {
         self.redraw();
     }
 }
-
-
 
 use winapi::shared::windef::HWND;
 

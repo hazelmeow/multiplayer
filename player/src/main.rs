@@ -179,16 +179,9 @@ impl Connection {
                         }
 
                         p.receive(frame.data);
-                        if p.frames_received % 5 == 0 {
-                            // visualization buffer ready
-                            let samples = p.get_visualizer_buffer();
-                            let mut samples = samples.lock().unwrap();
-                            if samples.len() < 20 {
-                                continue;
-                            }
-                            let bars = audio::calculate_visualizer(&samples.remove(0));
+                        if let Some(samples) = p.get_visualizer_buffer() {
+                            let bars = audio::calculate_visualizer(&samples);
                             tx.send(AudioStatus::Visualizer(bars)).unwrap();
-
                         }
                     }
                     AudioData::Start => {

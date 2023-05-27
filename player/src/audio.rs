@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
@@ -18,7 +19,6 @@ pub struct Player {
     buffer: Arc<Mutex<Ringbuf<f32>>>,
     stream: Option<Stream>,
     pub frames_received: usize,
-    visualizer_buffer: Arc<Mutex<Vec<[f32; 480 * 5]>>>, // :3
 }
 impl Player {
     pub fn new() -> Self {
@@ -27,7 +27,6 @@ impl Player {
             buffer: Arc::new(Mutex::new(Ringbuf::<f32>::new(PLAYER_BUFFER_SIZE))),
             stream: None,
             frames_received: 0,
-            visualizer_buffer: Arc::new(Mutex::new(vec![])),
         }
     }
 
@@ -45,21 +44,6 @@ impl Player {
         } else {
             // otherwise just discard i guess
             println!("player buffer full... discarding :/")
-        }
-
-        let chunk = self.frames_received % 5;
-        let mut buf = self.visualizer_buffer.lock().unwrap();
-        let bl = buf.len();
-
-        if chunk == 0 || bl == 0 {
-            buf.push([0.0;480*5]);
-        }
-
-        let bl = buf.len();
-
-        for (i, s) in pcm.iter().step_by(2).enumerate() {
-            let summed = s + pcm[i + 1] / 2.0;
-            buf[bl-1][chunk + i] = summed;
         }
     }
 
@@ -147,9 +131,21 @@ impl Player {
     pub fn fake_frames_received(&mut self, frames: usize) {
         self.frames_received = frames;
     }
-    pub fn get_visualizer_buffer(&mut self) -> Arc<Mutex<Vec<[f32; 480 * 5]>>> {
-        assert!(self.frames_received % 5 == 0);
-        self.visualizer_buffer.clone()
+    pub fn get_visualizer_buffer(&mut self) -> Option<[f32; 4096]> {
+        let buf = self.buffer.lock().unwrap();
+        let copied = buf.as_slices();
+
+        let mut sbuf = [0.0;4096];
+        if copied.0.len() > sbuf.len() {
+            for (i, s) in copied.0.iter().step_by(2).enumerate() {
+                if i >= sbuf.len() { break }
+                let summed = s + copied.0[i + 1] / 2.0;
+                sbuf[i] = summed;
+            } 
+            Some(sbuf)
+        } else {
+            None
+        }
     }
     pub fn buffer_status(&self) -> u8 {
         let buffer = self.buffer.lock().unwrap();
@@ -190,9 +186,8 @@ fn write_audio<T: Sample>(
     }
 }
 
-pub fn calculate_visualizer(samples: &[f32; 2400]) -> [u8; 14] {
-    let samples_truncated = &samples[..2048];
-    let hamming_window = spectrum_analyzer::windows::hann_window(samples_truncated);
+pub fn calculate_visualizer(samples: &[f32; 4096]) -> [u8; 14] {
+    let hamming_window = spectrum_analyzer::windows::hamming_window(samples);
     let spectrum = spectrum_analyzer::samples_fft_to_spectrum(
         &hamming_window,
         48000,
@@ -207,25 +202,20 @@ pub fn calculate_visualizer(samples: &[f32; 2400]) -> [u8; 14] {
 
     for (fr, fr_val) in spectrum.data().iter() {
         let fr = fr.val();
-        if fr < 25.0 {
+        if fr < 20.0 {
             continue;
         }
 
-        let index = (-5.25062 * fr.log(0.06) - 7.56997).round().min(13.0) as usize;
+        let index = (-5.35062 * fr.log(0.06) - 6.36997).round().min(13.0) as usize;
         //println!("{}, {}, {}", index, fr);
-        let lmao = if fr < 200.0 {
-            3.0
-        } else if fr < 500.0 {
-            2.0
-        } else {
-            1.0
-        };
-        bars_float[index] += fr_val.val() * lmao;
+
+        // made up scaling based on my subjective opinion on what looks kinda fine i guess
+        bars_float[index] += fr_val.val() * (4.5-fr.log10());
     }
     //println!("{:?}", bars_float);
     let bars: [u8; 14] = bars_float
         .iter()
-        .map(|&num| (num as f32 / 2.0).round().min(8.0) as u8)
+        .map(|&num| (num as f32).round().min(8.0) as u8)
         .collect::<Vec<u8>>()
         .try_into()
         .unwrap();
