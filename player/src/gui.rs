@@ -140,7 +140,9 @@ impl MainWindow {
         display.set_color(Color::Blue);
 
         let mut art_frame = Frame::new(228, 34, 31, 31, "");
-        art_frame.set_frame(FrameType::DownBox);
+        art_frame.set_align(Align::ImageBackdrop);
+        art_frame.set_frame(FrameType::DownFrame);
+        
         display.add(&art_frame);
 
         let mut lbl_title = Frame::new(105, 35, 150, 16, "nothing playing");

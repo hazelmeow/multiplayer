@@ -32,7 +32,6 @@ pub struct Track {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum TrackArt {
-    Png(Vec<u8>),
     Jpeg(Vec<u8>),
 }
 

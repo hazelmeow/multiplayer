@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::error::Error;
+use std::io::Cursor;
 
 use opus::Encoder;
 use rubato::{InterpolationParameters, Resampler, SincFixedOut};
@@ -14,6 +15,8 @@ use tokio::time::Interval;
 
 use protocol::{AudioData, Message, TrackArt};
 use protocol::{AudioFrame, TrackMetadata};
+
+use image::imageops::FilterType;
 
 pub struct AudioInfoReader {
     probe_result: ProbeResult,
@@ -135,8 +138,22 @@ impl AudioInfoReader {
         // just assume there's only one visual in the file?
         if let Some(v) = visuals.first() {
             match v.media_type.as_str() {
-                "image/png" => md.art = Some(TrackArt::Png(v.data.clone().into())),
-                "image/jpeg" => md.art = Some(TrackArt::Jpeg(v.data.clone().into())),
+                "image/png" | "image/jpeg" => {
+                    let reader = image::io::Reader::new(Cursor::new(v.data.clone()))
+                        .with_guessed_format()
+                        .expect("cursor io never fails");
+
+                    if let Ok(image) = reader.decode() {
+                        let resized = image.resize(29, 29, FilterType::Nearest);
+                        let mut buf: Vec<u8> = vec![];
+                        let mut jpeg_encoder = image::codecs::jpeg::JpegEncoder::new(&mut buf);
+                        jpeg_encoder.encode_image(&resized).unwrap();
+                        md.art = Some(TrackArt::Jpeg(buf))
+                    } else {
+                        md.art = None
+                    }
+
+                },
 
                 _ => println!("unhandled media_type for visual: {}", v.media_type),
             }

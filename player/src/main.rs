@@ -652,32 +652,10 @@ async fn main() -> std::io::Result<()> {
 
                                 if let Some(art) = track.metadata.art {
                                     if let Err(err) = match art {
-                                        TrackArt::Png(data) => fltk::image::PngImage::from_data(
-                                            &data,
-                                        )
-                                        .and_then(|mut img| {
-                                            img.scale(29, 29, false, true);
-
-                                            // uhh just make this be the same as jpeg once u fix the other thing
-                                            // or refactor it properly to not be duplicated
-                                            // its just annoying to change both just test with one type at a time
-                                            // gui.art_frame.draw(|| {
-                                            //     img.draw(
-                                            //         gui.art_frame.x(),
-                                            //         gui.art_frame.y(),
-                                            //         29,
-                                            //         29,
-                                            //     );
-                                            // });
-
-                                            Ok(())
-                                        }),
                                         TrackArt::Jpeg(data) => JpegImage::from_data(&data)
-                                            .and_then(|mut img| {
-                                                img.scale(29, 29, false, true);
-                                                gui.art_frame.draw(move |f| {
-                                                    img.draw(f.x() + 2, f.y() + 1, 29, 29);
-                                                });
+                                            .and_then(|img| {
+                                                gui.art_frame.set_image(Some(img));
+                                                gui.art_frame.redraw();
                                                 Ok(())
                                             }),
                                     } {
