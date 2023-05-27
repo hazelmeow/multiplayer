@@ -1,14 +1,15 @@
 use aes_gcm_siv::Aes256GcmSiv;
 use fltk::app;
+use fltk::image::JpegImage;
+use fltk::prelude::{BrowserExt, ImageExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 use fltk::window::DoubleWindow;
 use futures::StreamExt;
 use protocol::network::FrameStream;
-use protocol::{AudioData, AuthenticateRequest, GetInfo, Message, Track};
+use protocol::{AudioData, AuthenticateRequest, GetInfo, Message, Track, TrackArt};
 use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::path::PathBuf;
 use tokio::sync::mpsc::UnboundedSender;
-
 use tokio::time::timeout;
 use tokio::{net::TcpStream, sync::mpsc};
 
@@ -19,7 +20,6 @@ mod transmit;
 use transmit::{AudioInfoReader, TransmitCommand, TransmitThread, TransmitThreadHandle};
 
 mod gui;
-use fltk::prelude::{BrowserExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 
 struct Connection {
     stream: FrameStream,
@@ -633,8 +633,8 @@ async fn main() -> std::io::Result<()> {
                                         .unwrap_or(&"[no title]".to_string())
                                 );
                                 queue_gui.queue_browser.add(&line);
-                                // also update display
 
+                                // also update display
                                 gui.lbl_title.set_label(
                                     track
                                         .metadata
@@ -648,7 +648,42 @@ async fn main() -> std::io::Result<()> {
                                         .artist
                                         .as_ref()
                                         .unwrap_or(&"[unknown artist]".to_string()),
-                                )
+                                );
+
+                                if let Some(art) = track.metadata.art {
+                                    if let Err(err) = match art {
+                                        TrackArt::Png(data) => fltk::image::PngImage::from_data(
+                                            &data,
+                                        )
+                                        .and_then(|mut img| {
+                                            img.scale(29, 29, false, true);
+
+                                            // uhh just make this be the same as jpeg once u fix the other thing
+                                            // or refactor it properly to not be duplicated
+                                            // its just annoying to change both just test with one type at a time
+                                            // gui.art_frame.draw(|| {
+                                            //     img.draw(
+                                            //         gui.art_frame.x(),
+                                            //         gui.art_frame.y(),
+                                            //         29,
+                                            //         29,
+                                            //     );
+                                            // });
+
+                                            Ok(())
+                                        }),
+                                        TrackArt::Jpeg(data) => JpegImage::from_data(&data)
+                                            .and_then(|mut img| {
+                                                img.scale(29, 29, false, true);
+                                                gui.art_frame.draw(move |f| {
+                                                    img.draw(f.x() + 2, f.y() + 1, 29, 29);
+                                                });
+                                                Ok(())
+                                            }),
+                                    } {
+                                        eprintln!("failed to load image: {:?}", err);
+                                    }
+                                }
                             }
                             for track in queue {
                                 let line = format!(

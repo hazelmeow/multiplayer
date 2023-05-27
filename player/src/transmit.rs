@@ -12,7 +12,7 @@ use symphonia::core::meta::{MetadataOptions, StandardTagKey};
 use symphonia::core::probe::{Hint, ProbeResult};
 use tokio::time::Interval;
 
-use protocol::{AudioData, Message};
+use protocol::{AudioData, Message, TrackArt};
 use protocol::{AudioFrame, TrackMetadata};
 
 pub struct AudioInfoReader {
@@ -84,16 +84,20 @@ impl AudioInfoReader {
 
         // read track metadata
         let mut track_md = TrackMetadata::default();
-
         track_md.duration = (duration as f64 / spec.rate as f64) as usize;
 
-        let mut md = self.probe_result.format.metadata();
-        if let Some(current) = md.skip_to_latest() {
-            let tags = current.tags();
-            Self::fill_metadata(&mut track_md, tags);
+        let mut format_md = self.probe_result.format.metadata();
+        if let Some(rev) = format_md.skip_to_latest() {
+            let tags = rev.tags();
+            let visuals = rev.visuals();
+
+            Self::fill_metadata(&mut track_md, tags, visuals);
         } else if let Some(mut md) = self.probe_result.metadata.get() {
-            let tags = md.skip_to_latest().unwrap().tags();
-            Self::fill_metadata(&mut track_md, tags);
+            let rev = md.skip_to_latest().unwrap();
+            let tags = rev.tags();
+            let visuals = rev.visuals();
+
+            Self::fill_metadata(&mut track_md, tags, visuals);
         } else {
             println!("really no metadata to speak of...");
         }
@@ -101,7 +105,11 @@ impl AudioInfoReader {
         Ok((spec.rate, spec.channels.count(), track_md))
     }
 
-    fn fill_metadata(md: &mut TrackMetadata, tags: &[symphonia::core::meta::Tag]) {
+    fn fill_metadata(
+        md: &mut TrackMetadata,
+        tags: &[symphonia::core::meta::Tag],
+        visuals: &[symphonia::core::meta::Visual],
+    ) {
         for tag in tags {
             match tag.std_key {
                 Some(StandardTagKey::TrackTitle) => {
@@ -121,6 +129,16 @@ impl AudioInfoReader {
                 }
 
                 _ => {}
+            }
+        }
+
+        // just assume there's only one visual in the file?
+        if let Some(v) = visuals.first() {
+            match v.media_type.as_str() {
+                "image/png" => md.art = Some(TrackArt::Png(v.data.clone().into())),
+                "image/jpeg" => md.art = Some(TrackArt::Jpeg(v.data.clone().into())),
+
+                _ => println!("unhandled media_type for visual: {}", v.media_type),
             }
         }
     }

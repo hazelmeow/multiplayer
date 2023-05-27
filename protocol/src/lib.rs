@@ -30,6 +30,12 @@ pub struct Track {
     pub metadata: TrackMetadata,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum TrackArt {
+    Png(Vec<u8>),
+    Jpeg(Vec<u8>),
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct TrackMetadata {
     pub duration: usize,
@@ -38,6 +44,7 @@ pub struct TrackMetadata {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub album_artist: Option<String>,
+    pub art: Option<TrackArt>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

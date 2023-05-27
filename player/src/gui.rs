@@ -34,6 +34,7 @@ pub struct MainWindow {
     pub visualizer: Visualizer,
     pub bitrate_bar: BitrateBar,
     pub volume_slider: HorSlider,
+    pub art_frame: Frame,
 }
 impl MainWindow {
     pub fn make_window(s: Sender<UIEvent>) -> Self {
@@ -138,9 +139,9 @@ impl MainWindow {
         display.set_align(Align::ImageBackdrop);
         display.set_color(Color::Blue);
 
-        /* let mut art_frame = Frame::new(228, 34, 31, 31, "");
+        let mut art_frame = Frame::new(228, 34, 31, 31, "");
         art_frame.set_frame(FrameType::DownBox);
-        display.add(&art_frame); */
+        display.add(&art_frame);
 
         let mut lbl_title = Frame::new(105, 35, 150, 16, "nothing playing");
         lbl_title.set_align(Align::Left | Align::Inside);
@@ -202,7 +203,8 @@ impl MainWindow {
             lbl_data1,
             visualizer,
             bitrate_bar,
-            volume_slider
+            volume_slider,
+            art_frame,
         }
     }
 
