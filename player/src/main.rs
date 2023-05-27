@@ -211,6 +211,9 @@ impl Connection {
                         tx.send(AudioStatus::Elapsed(0)).unwrap();
                         p.clear();
                     }
+                    AudioData::Volume(val) => {
+                        p.volume(val);
+                    }
                     AudioData::Shutdown => break,
                 }
                 if p.is_ready() && wants_play {
@@ -406,12 +409,21 @@ impl Connection {
                                 _ => {}
                             }
                         }
+                        UIEvent::VolumeSlider(pos) => {
+                            self.audio_tx.send(AudioData::Volume(pos)).unwrap();
+                        }
                         UIEvent::Test(text) => {
                             self.message_tx.send(Message::Text(text)).unwrap();
                         },
                         UIEvent::GetInfo(i) => {
                             self.message_tx.send(Message::GetInfo(i)).unwrap();
                         },
+                        UIEvent::VolumeUp => {
+                            self.ui_sender.send(UIEvent::Update(UIUpdateEvent::VolumeUp));
+                        }
+                        UIEvent::VolumeDown => {
+                            self.ui_sender.send(UIEvent::Update(UIUpdateEvent::VolumeDown));
+                        }
                         UIEvent::Quit => break,
                         _ => {}
                     }
@@ -508,6 +520,21 @@ async fn main() -> std::io::Result<()> {
                 released = false;
                 true
             }
+            fltk::enums::Event::MouseWheel => {
+                let dy = app::event_dy();
+                match dy {
+                    // uhhhhhhhh these are the opposite of what you'd think (???)
+                    app::MouseWheel::Up => {
+                        tx.send(UIEvent::VolumeDown).unwrap();
+                        true
+                    }
+                    app::MouseWheel::Down => {
+                        tx.send(UIEvent::VolumeUp).unwrap();
+                        true
+                    }
+                    _ => false,
+                }
+            }
             _ => false,
         };
 
@@ -531,6 +558,10 @@ async fn main() -> std::io::Result<()> {
         // TODO: we'd probably have to communicate this somehow
         //       for now just pretend
         gui.bitrate_bar.update_bitrate(256);
+
+        // blehhhh this is all such a mess
+        gui.volume_slider.set_value(0.5);
+        ui_tx.send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(0.5))).unwrap();
 
         while app.wait() {
             if let Some(msg) = receiver.recv() {
@@ -556,6 +587,20 @@ async fn main() -> std::io::Result<()> {
                         }
                         UIUpdateEvent::Status(val) => {
                             gui.status_field.set_label(&val);
+                        }
+                        UIUpdateEvent::VolumeUp => {
+                            gui.volume_slider
+                                .set_value((gui.volume_slider.value() + 0.02).min(1.));
+                            ui_tx.send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(
+                                gui.volume_slider.value(),
+                            ))).unwrap();
+                        }
+                        UIUpdateEvent::VolumeDown => {
+                            gui.volume_slider
+                                .set_value((gui.volume_slider.value() - 0.02).max(0.));
+                            ui_tx.send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(
+                                gui.volume_slider.value(),
+                            ))).unwrap();
                         }
                         UIUpdateEvent::UpdateUserList(val) => {
                             gui.users.clear();
@@ -629,20 +674,14 @@ async fn main() -> std::io::Result<()> {
                         // if stopped and queue is empty, ask for file
                         // if stopped and queue has songs, tell it to play
                         // if already playing, do nothing
-
                     }
                     UIEvent::BtnStop => {
                         ui_tx.send(UIEvent::Stop).unwrap();
                     }
-                    UIEvent::BtnPause => {
+                    UIEvent::BtnPause => {}
+                    UIEvent::BtnNext => {}
+                    UIEvent::BtnPrev => {}
 
-                    }
-                    UIEvent::BtnNext => {
-
-                    }
-                    UIEvent::BtnPrev => {
-
-                    }
                     UIEvent::BtnQueue => {
                         queue_gui.main_win.show();
                         //ui_tx.send(UIEvent::Update(UIUpdateEvent::UpdateQueue(self.queue.clone())));
@@ -676,6 +715,9 @@ pub enum UIEvent {
     BtnNext,
     BtnPrev,
     BtnQueue,
+    VolumeSlider(f32),
+    VolumeUp,
+    VolumeDown,
     Update(UIUpdateEvent),
     Play(PathBuf),
     Stop,
@@ -695,6 +737,8 @@ pub enum UIUpdateEvent {
     Visualizer([u8; 14]),
     Buffer(u8),
     Bitrate(usize),
+    VolumeUp,
+    VolumeDown,
 }
 
 struct UIState {

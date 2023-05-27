@@ -18,7 +18,8 @@ pub struct Player {
     decoder: Decoder,
     buffer: Arc<Mutex<Ringbuf<f32>>>,
     stream: Option<Stream>,
-    pub frames_received: usize,
+    frames_received: usize,
+    volume: Arc<Mutex<f32>>,
 }
 impl Player {
     pub fn new() -> Self {
@@ -27,6 +28,7 @@ impl Player {
             buffer: Arc::new(Mutex::new(Ringbuf::<f32>::new(PLAYER_BUFFER_SIZE))),
             stream: None,
             frames_received: 0,
+            volume: Arc::new(Mutex::new(1.0)),
         }
     }
 
@@ -71,11 +73,12 @@ impl Player {
         let config = supported_config.into();
 
         let buffer_handle = self.buffer.clone();
+        let volume_handle = self.volume.clone();
 
         let stream = device
             .build_output_stream(
                 &config,
-                move |data, info| write_audio::<f32>(data, info, &buffer_handle),
+                move |data, info| write_audio::<f32>(data, info, &buffer_handle, &volume_handle),
                 err_fn,
                 None,
             )
@@ -162,6 +165,10 @@ impl Player {
             _ => 7,       // and beyond
         }
     }
+    pub fn volume(&mut self, vol: f32) {
+        let mut v = self.volume.lock().unwrap();
+        *v = vol;
+    }
 }
 
 // callback when the audio output needs more data
@@ -169,19 +176,22 @@ fn write_audio<T: Sample>(
     out_data: &mut [f32],
     _: &cpal::OutputCallbackInfo,
     buffer_mutex: &Arc<Mutex<Ringbuf<f32>>>,
+    volume_mutex: &Arc<Mutex<f32>>,
 ) {
     let mut buffer = buffer_mutex.lock().unwrap();
+    let vol = volume_mutex.lock().unwrap();
     if out_data.len() < buffer.len() {
         buffer.pop_slice(out_data);
 
         for sample in out_data.iter_mut() {
-            *sample = *sample * 0.1;
+            *sample = *sample * *vol; // lol
         }
     } else {
         // uhhhh
         println!("write_audio: buffer underrun!! (but no panic)");
     }
-    if buffer.len() < 48000 * 2 - 10000 {
+    if buffer.len() < 12000 {
+        // TODO: actually fix this......
         println!("write_audio: buffer has {} left", buffer.len());
     }
 }

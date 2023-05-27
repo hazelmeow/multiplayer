@@ -19,6 +19,7 @@ pub enum AudioData {
     Resume,
     Finish,
     Clear,
+    Volume(f32), // this is where having this be the thing we pass across the network kinda breaks down,,
     Shutdown,
 }
 

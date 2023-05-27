@@ -33,6 +33,7 @@ pub struct MainWindow {
     pub lbl_data1: Frame,
     pub visualizer: Visualizer,
     pub bitrate_bar: BitrateBar,
+    pub volume_slider: HorSlider,
 }
 impl MainWindow {
     pub fn make_window(s: Sender<UIEvent>) -> Self {
@@ -167,6 +168,15 @@ impl MainWindow {
 
         // --- end of display ---
 
+        let mut volume_slider = HorSlider::new(110, 70, 80, 13, "");
+        volume_slider.set_bounds(0., 1.);
+        volume_slider.set_step(0.01, 1);
+        let tmp = s.clone();
+        volume_slider.set_callback(move|vs| {
+            tmp.send(UIEvent::VolumeSlider(Self::volume_scale(vs.value())));
+        });
+        main_win.add(&volume_slider);
+
         let mut users = Browser::new(main_win.width() - 85 - 18, 26, 85, 120, "Users");
         users.add("* not loaded :/");
         main_win.add(&users);
@@ -192,7 +202,12 @@ impl MainWindow {
             lbl_data1,
             visualizer,
             bitrate_bar,
+            volume_slider
         }
+    }
+
+    pub fn volume_scale(val: f64) -> f32 {
+        val.powf(3.) as f32
     }
 
     pub fn fix_taskbar_after_show(&mut self) {
