@@ -245,6 +245,9 @@ impl Connection {
 
     async fn main_loop(&mut self) {
         self.ui_status_default();
+        
+        let mut ui_interval = tokio::time::interval(tokio::time::Duration::from_millis(50));
+
         loop {
             tokio::select! {
                 // something to send
@@ -406,7 +409,9 @@ impl Connection {
                                 PlayState::Transmitting => {
                                     self.transmit.send(TransmitCommand::Stop).unwrap();
                                 }
-                                _ => {}
+                                _ => {
+                                    println!("pointless stop button use");
+                                }
                             }
                         }
                         UIEvent::VolumeSlider(pos) => {
@@ -427,6 +432,10 @@ impl Connection {
                         UIEvent::Quit => break,
                         _ => {}
                     }
+                }
+
+                _ = ui_interval.tick() => {
+                    self.ui_sender.send(UIEvent::Update(UIUpdateEvent::Periodic));
                 }
 
             }
@@ -563,6 +572,8 @@ async fn main() -> std::io::Result<()> {
         gui.volume_slider.set_value(0.5);
         ui_tx.send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(0.5))).unwrap();
 
+        gui.lbl_title.set_text(&"hi, welcome >.<".to_string());
+
         while app.wait() {
             if let Some(msg) = receiver.recv() {
                 //println!("got event from app: {:?}", msg);
@@ -587,6 +598,11 @@ async fn main() -> std::io::Result<()> {
                         }
                         UIUpdateEvent::Status(val) => {
                             gui.status_field.set_label(&val);
+                        }
+                        UIUpdateEvent::Periodic => {
+                            if gui.lbl_title.waited_long_enough() {
+                                gui.lbl_title.nudge(-4);
+                            }
                         }
                         UIUpdateEvent::VolumeUp => {
                             gui.volume_slider
@@ -635,13 +651,15 @@ async fn main() -> std::io::Result<()> {
                                 queue_gui.queue_browser.add(&line);
 
                                 // also update display
-                                gui.lbl_title.set_label(
+                                gui.lbl_title.set_text(
                                     track
                                         .metadata
                                         .title
                                         .as_ref()
                                         .unwrap_or(&"[no title]".to_string()),
                                 );
+                                gui.lbl_title.zero();
+
                                 gui.lbl_data1.set_label(
                                     track
                                         .metadata
@@ -661,6 +679,9 @@ async fn main() -> std::io::Result<()> {
                                     } {
                                         eprintln!("failed to load image: {:?}", err);
                                     }
+                                } else {
+                                    gui.art_frame.set_image(None::<JpegImage>); // hm that's silly
+                                    gui.art_frame.redraw();
                                 }
                             }
                             for track in queue {
@@ -752,6 +773,7 @@ pub enum UIUpdateEvent {
     Bitrate(usize),
     VolumeUp,
     VolumeDown,
+    Periodic,
 }
 
 struct UIState {
