@@ -18,6 +18,8 @@ use protocol::{AudioFrame, TrackMetadata};
 
 use image::imageops::FilterType;
 
+use crate::AudioEngineData;
+
 pub struct AudioInfoReader {
     probe_result: ProbeResult,
     decoder: Box<dyn Decoder>,
@@ -336,7 +338,7 @@ pub enum TransmitCommand {
 
 //temp
 type MessageTx = tokio::sync::mpsc::UnboundedSender<Message>;
-type AudioTx = std::sync::mpsc::Sender<AudioData>;
+type AudioTx = std::sync::mpsc::Sender<AudioEngineData>;
 
 type TransmitTx = tokio::sync::mpsc::UnboundedSender<TransmitCommand>;
 type TransmitRx = tokio::sync::mpsc::UnboundedReceiver<TransmitCommand>;
@@ -407,7 +409,7 @@ impl TransmitThread {
     }
 
     fn send_both(&self, data: AudioData) {
-        self.audio_tx.send(data.clone()).unwrap();
+        self.audio_tx.send(AudioEngineData::AudioData(data.clone())).unwrap();
         self.message_tx.send(Message::AudioData(data)).unwrap();
     }
 
@@ -459,7 +461,7 @@ impl TransmitThread {
                 if let Ok(frame) = f {
                     // borrow checker doesn't like self.send_both() here since we already borrow self or something
                     let data = AudioData::Frame(frame);
-                    self.audio_tx.send(data.clone()).unwrap();
+                    self.audio_tx.send(AudioEngineData::AudioData(data.clone())).unwrap();
                     self.message_tx.send(Message::AudioData(data)).unwrap();
                 } else {
                     break; // we're done i guess

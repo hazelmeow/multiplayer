@@ -13,16 +13,10 @@ pub struct AudioFrame {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum AudioData {
     Start,
-    StartLate(usize),
     Frame(AudioFrame),
-    Stop,
-    Resume,
     Finish,
-    Clear,
-    Volume(f32), // this is where having this be the thing we pass across the network kinda breaks down,,
-    Shutdown,
+    Resume,
 }
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
     pub owner: String,

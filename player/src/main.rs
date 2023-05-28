@@ -43,7 +43,7 @@ struct Connection {
     message_tx: mpsc::UnboundedSender<Message>,
 
     // transmit audio to playback subsystem
-    audio_tx: std::sync::mpsc::Sender<AudioData>,
+    audio_tx: std::sync::mpsc::Sender<AudioEngineData>,
 
     // get status feedback from audio playing
     audio_status_rx: mpsc::UnboundedReceiver<AudioStatus>,
@@ -106,7 +106,7 @@ impl Connection {
 
         let (message_tx, message_rx) = mpsc::unbounded_channel::<Message>();
 
-        let (audio_tx, audio_rx) = std::sync::mpsc::channel::<AudioData>();
+        let (audio_tx, audio_rx) = std::sync::mpsc::channel::<AudioEngineData>();
         let audio_status_rx = Self::run_audio(audio_rx);
 
         let (transmit_tx, transmit_rx) = tokio::sync::mpsc::unbounded_channel::<TransmitCommand>();
@@ -157,7 +157,7 @@ impl Connection {
     }
 
     fn run_audio(
-        audio_rx: std::sync::mpsc::Receiver<AudioData>,
+        audio_rx: std::sync::mpsc::Receiver<AudioEngineData>,
     ) -> mpsc::UnboundedReceiver<AudioStatus> {
         // audio player thread
 
@@ -171,50 +171,49 @@ impl Connection {
 
             while let Ok(data) = audio_rx.recv() {
                 match data {
-                    AudioData::Frame(frame) => {
-                        if frame.frame % 10 == 0 {
-                            tx.send(AudioStatus::Elapsed(p.get_seconds_elapsed()))
-                                .unwrap();
-                            tx.send(AudioStatus::Buffer(p.buffer_status())).unwrap();
-                        }
+                    AudioEngineData::AudioData(d) => match d {
+                        AudioData::Frame(frame) => {
+                            if frame.frame % 10 == 0 {
+                                tx.send(AudioStatus::Elapsed(p.get_seconds_elapsed()))
+                                    .unwrap();
+                                tx.send(AudioStatus::Buffer(p.buffer_status())).unwrap();
+                            }
 
-                        p.receive(frame.data);
-                        if let Some(samples) = p.get_visualizer_buffer() {
-                            let bars = audio::calculate_visualizer(&samples);
-                            tx.send(AudioStatus::Visualizer(bars)).unwrap();
+                            p.receive(frame.data);
+                            if let Some(samples) = p.get_visualizer_buffer() {
+                                let bars = audio::calculate_visualizer(&samples);
+                                tx.send(AudioStatus::Visualizer(bars)).unwrap();
+                            }
                         }
-                    }
-                    AudioData::Start => {
-                        wants_play = true;
-                        p.fake_frames_received(0);
-                        tx.send(AudioStatus::Buffering).unwrap();
-                    }
-                    AudioData::StartLate(frame_id) => {
+                        AudioData::Start => {
+                            wants_play = true;
+                            p.fake_frames_received(0);
+                            tx.send(AudioStatus::Buffering).unwrap();
+                        }
+                        AudioData::Finish => {
+                            while !p.finish() {
+                                std::thread::sleep(std::time::Duration::from_millis(20));
+                            }
+                            p.pause();
+                            tx.send(AudioStatus::Finished).unwrap();
+                        }
+                        AudioData::Resume => {
+                            p.resume();
+                        }
+                    },
+                    AudioEngineData::StartLate(frame_id) => {
                         wants_play = true;
                         p.fake_frames_received(frame_id);
                     }
-                    AudioData::Stop => {
-                        p.pause();
-                    }
-                    AudioData::Resume => {
-                        p.resume();
-                    }
-                    AudioData::Finish => {
-                        println!("finishing.....");
-                        while !p.finish() {
-                            std::thread::sleep(std::time::Duration::from_millis(20));
-                        }
-                        p.pause();
-                        tx.send(AudioStatus::Finished).unwrap();
-                    }
-                    AudioData::Clear => {
+
+                    AudioEngineData::Clear => {
                         tx.send(AudioStatus::Elapsed(0)).unwrap();
                         p.clear();
                     }
-                    AudioData::Volume(val) => {
+                    AudioEngineData::Volume(val) => {
                         p.volume(val);
                     }
-                    AudioData::Shutdown => break,
+                    AudioEngineData::Shutdown => break,
                 }
                 if p.is_ready() && wants_play {
                     wants_play = false;
@@ -245,7 +244,7 @@ impl Connection {
 
     async fn main_loop(&mut self) {
         self.ui_status_default();
-        
+
         let mut ui_interval = tokio::time::interval(tokio::time::Duration::from_millis(50));
 
         loop {
@@ -347,18 +346,18 @@ impl Connection {
                                         if !self.is_synced {
                                             // we're late.... try and catch up will you
                                             self.is_synced = true;
-                                            self.audio_tx.send(AudioData::StartLate(f.frame as usize)).unwrap();
+                                            self.audio_tx.send(AudioEngineData::StartLate(f.frame as usize)).unwrap();
                                         }
 
-                                        self.audio_tx.send(AudioData::Frame(f)).unwrap();
+                                        self.audio_tx.send(AudioEngineData::AudioData(AudioData::Frame(f))).unwrap();
                                     }
                                     protocol::AudioData::Start => {
                                         self.is_synced = true;
-                                        self.audio_tx.send(data).unwrap();
+                                        self.audio_tx.send(AudioEngineData::AudioData(data)).unwrap();
                                     }
                                     _ => {
                                         // forward to audio thread
-                                        self.audio_tx.send(data).unwrap();
+                                        self.audio_tx.send(AudioEngineData::AudioData(data)).unwrap();
                                     }
                                 }
 
@@ -415,7 +414,7 @@ impl Connection {
                             }
                         }
                         UIEvent::VolumeSlider(pos) => {
-                            self.audio_tx.send(AudioData::Volume(pos)).unwrap();
+                            self.audio_tx.send(AudioEngineData::Volume(pos)).unwrap();
                         }
                         UIEvent::Test(text) => {
                             self.message_tx.send(Message::Text(text)).unwrap();
@@ -570,7 +569,9 @@ async fn main() -> std::io::Result<()> {
 
         // blehhhh this is all such a mess
         gui.volume_slider.set_value(0.5);
-        ui_tx.send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(0.5))).unwrap();
+        ui_tx
+            .send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(0.5)))
+            .unwrap();
 
         gui.lbl_title.set_text(&"hi, welcome >.<".to_string());
 
@@ -607,16 +608,20 @@ async fn main() -> std::io::Result<()> {
                         UIUpdateEvent::VolumeUp => {
                             gui.volume_slider
                                 .set_value((gui.volume_slider.value() + 0.02).min(1.));
-                            ui_tx.send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(
-                                gui.volume_slider.value(),
-                            ))).unwrap();
+                            ui_tx
+                                .send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(
+                                    gui.volume_slider.value(),
+                                )))
+                                .unwrap();
                         }
                         UIUpdateEvent::VolumeDown => {
                             gui.volume_slider
                                 .set_value((gui.volume_slider.value() - 0.02).max(0.));
-                            ui_tx.send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(
-                                gui.volume_slider.value(),
-                            ))).unwrap();
+                            ui_tx
+                                .send(UIEvent::VolumeSlider(gui::MainWindow::volume_scale(
+                                    gui.volume_slider.value(),
+                                )))
+                                .unwrap();
                         }
                         UIUpdateEvent::UpdateUserList(val) => {
                             gui.users.clear();
@@ -788,6 +793,15 @@ enum AudioStatus {
     Finished,
     Visualizer([u8; 14]),
     Buffer(u8),
+}
+
+#[derive(Debug, Clone)]
+pub enum AudioEngineData {
+    AudioData(AudioData),
+    StartLate(usize),
+    Clear,
+    Volume(f32),
+    Shutdown,
 }
 
 #[derive(Debug, PartialEq)]
