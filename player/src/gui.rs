@@ -213,12 +213,17 @@ impl MainWindow {
         val.powf(3.) as f32
     }
 
+    #[cfg(not(target_os = "windows"))]
     pub fn fix_taskbar_after_show(&mut self) {
         // TODO: implement on other platforms? lmao
+    }
+    #[cfg(target_os = "windows")]
+    pub fn fix_taskbar_after_show(&mut self) {
         unsafe {
             shitty_windows_only_hack(&mut self.main_win);
         }
     }
+
     pub fn add_bar(
         win: &mut DoubleWindow,
         s: Sender<UIEvent>,
@@ -564,17 +569,19 @@ impl MarqueeLabel {
                 false
             }
         }
-
     }
 }
 
+#[cfg(target_os = "windows")]
 use winapi::shared::windef::HWND;
 
+#[cfg(target_os = "windows")]
 use winapi::um::winuser::{
     GetWindowLongPtrW, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOW,
 };
 
 // this is fucking cursed
+#[cfg(target_os = "windows")]
 unsafe fn shitty_windows_only_hack(w: &mut DoubleWindow) {
     let handle: HWND = std::mem::transmute(w.raw_handle());
     ShowWindow(handle, SW_HIDE);
