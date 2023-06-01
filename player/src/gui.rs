@@ -1,6 +1,3 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use fltk::app::Sender;
 use fltk::browser::*;
 use fltk::button::*;
@@ -8,19 +5,20 @@ use fltk::draw;
 use fltk::enums::*;
 use fltk::frame::*;
 use fltk::group::Group;
-use fltk::group::Pack;
 use fltk::image;
-use fltk::image::Image;
 use fltk::image::PngImage;
-use fltk::input::*;
 use fltk::prelude::*;
 use fltk::valuator::*;
-use fltk::widget;
-use fltk::widget_extends;
 use fltk::window::*;
 
-use crate::main;
 use crate::UIEvent;
+
+mod bitrate_bar;
+mod marquee_label;
+mod visualizer;
+use self::bitrate_bar::*;
+use self::marquee_label::*;
+use self::visualizer::*;
 
 pub struct MainWindow {
     pub main_win: Window,
@@ -142,7 +140,7 @@ impl MainWindow {
         let mut art_frame = Frame::new(228, 34, 31, 31, "");
         art_frame.set_align(Align::ImageBackdrop);
         art_frame.set_frame(FrameType::DownFrame);
-        
+
         display.add(&art_frame);
 
         let lbl_title = MarqueeLabel::new(105, 35, 120);
@@ -174,7 +172,7 @@ impl MainWindow {
         volume_slider.set_bounds(0., 1.);
         volume_slider.set_step(0.01, 1);
         let tmp = s.clone();
-        volume_slider.set_callback(move|vs| {
+        volume_slider.set_callback(move |vs| {
             tmp.send(UIEvent::VolumeSlider(Self::volume_scale(vs.value())));
         });
         main_win.add(&volume_slider);
@@ -327,249 +325,6 @@ fn create_horizontal_gradient_frame(
         }
     });
     frame
-}
-
-pub struct Visualizer {
-    inner: widget::Widget,
-    values: Rc<RefCell<[u8; 14]>>, // 14 bars (height 0 to 8)
-    prev_vals: [u8; 14],
-    timing: bool,
-}
-
-widget_extends!(Visualizer, widget::Widget, inner);
-
-impl Visualizer {
-    pub fn new(x: i32, y: i32) -> Self {
-        let mut inner = widget::Widget::default().with_size(41, 20).with_pos(x, y);
-        inner.set_frame(FrameType::FlatBox);
-
-        let values = [5; 14];
-        let values = Rc::from(RefCell::from(values));
-        let v = values.clone();
-
-        inner.draw(move |i| {
-            draw::draw_box(i.frame(), i.x(), i.y(), i.w(), i.h(), i.color());
-            draw::set_draw_color(Color::Black);
-            draw::draw_xyline(i.x(), i.y() + 16, i.x() + (14 * 3) - 2);
-            for bar in 0..14 {
-                let value = v.borrow()[bar] as i32;
-                for val in 0..value {
-                    let x = i.x() + bar as i32 * 3;
-                    let y = i.y() + (7 - val) * 2;
-                    draw::draw_xyline(x, y, x + 1);
-                }
-            }
-        });
-
-        Self {
-            inner,
-            values,
-            timing: false,
-            prev_vals: [0;14],
-        }
-    }
-    pub fn update_values(&mut self, values: [u8; 14]) {
-        {
-            let prev = self.values.borrow().clone();
-            let mut sv = self.values.borrow_mut();
-            let temp = sv.clone();
-            for i in 0..14 {
-                if values[i] > prev[i] {
-                    sv[i] = ((prev[i] as usize + self.prev_vals[i] as usize + values[i] as usize) / 3 as usize) as u8;
-                } else if sv[i] > 1 {
-                    if self.timing {
-                        sv[i] = sv[i] - 1;
-                    }
-                } else {
-                    sv[i] = 0;
-                }
-            }
-            self.timing = !self.timing;
-            self.prev_vals = temp;
-        }
-        self.redraw();
-    }
-}
-
-pub struct BitrateBar {
-    inner: widget::Widget,
-    bitrate: Rc<RefCell<usize>>,
-    buffer_level: Rc<RefCell<u8>>, // 0 to 6
-}
-
-widget_extends!(BitrateBar, widget::Widget, inner);
-
-impl BitrateBar {
-    pub fn new(x: i32, y: i32) -> Self {
-        let mut inner = widget::Widget::default().with_size(35, 14).with_pos(x, y);
-        inner.set_frame(FrameType::FlatBox);
-
-        let bitrate = 0;
-        let bitrate_c = Rc::from(RefCell::from(bitrate));
-        let bitrate_c_c = bitrate_c.clone();
-
-        let buffer_level = 0;
-        let buffer_level_c = Rc::from(RefCell::from(buffer_level));
-        let buffer_level_c_c = buffer_level_c.clone();
-
-        let mut font = PngImage::from_data(include_bytes!("../rsrc/font.png")).unwrap();
-
-        let mut buf_bar = PngImage::from_data(include_bytes!("../rsrc/bufbar.png")).unwrap();
-
-        inner.draw(move |i| {
-            draw::draw_box(i.frame(), i.x(), i.y(), i.w(), i.h(), i.color());
-            draw::set_draw_color(Color::Black);
-            let br = bitrate_c_c.borrow();
-            let br_chars = format!("{}k", br);
-            let mut x = 0;
-            for c in br_chars.chars().rev() {
-                let (cx, w) = Self::char_offset(c);
-                font.draw_ext(i.x() + i.width() - x - w, i.y(), w - 1, 5, cx, 0);
-                x += w - 1;
-            }
-
-            let bl = buffer_level_c_c.borrow();
-            buf_bar.draw(i.x(), i.y() + 6, 34, 4);
-            if *bl > 0 {
-                let w = (*bl as i32 * 5).min(30);
-                draw::draw_rect_fill(i.x() + 1, i.y() + 7, w + 1, 2, Color::Black);
-            }
-        });
-
-        Self {
-            inner,
-            bitrate: bitrate_c,
-            buffer_level: buffer_level_c,
-        }
-    }
-    fn char_offset(c: char) -> (i32, i32) {
-        match c {
-            // x-pos, width
-            '0' => (0, 7),
-            '1' => (7, 4),
-            '2' => (12, 7),
-            '3' => (19, 7),
-            '4' => (26, 7),
-            '5' => (33, 6),
-            '6' => (40, 6),
-            '7' => (47, 6),
-            '8' => (54, 6),
-            '9' => (61, 6),
-            'k' => (68, 19), // "kbps"
-            _ => (0, 0),
-        }
-    }
-    pub fn update_bitrate(&mut self, bitrate: usize) {
-        self.bitrate.replace(bitrate);
-        self.redraw();
-    }
-    pub fn update_buffer_level(&mut self, level: u8) {
-        self.buffer_level.replace(level);
-        self.redraw();
-    }
-}
-
-pub struct MarqueeLabel {
-    inner: widget::Widget,
-    offset: Rc<RefCell<i32>>,
-    text: Rc<RefCell<String>>,
-    start_timer: usize,
-    each_timer: usize,
-}
-
-widget_extends!(MarqueeLabel, widget::Widget, inner);
-
-impl MarqueeLabel {
-    pub fn new(x: i32, y: i32, width: i32) -> Self {
-        let mut inner = widget::Widget::default().with_size(width, 16).with_pos(x, y);
-        inner.set_frame(FrameType::FlatBox);
-        
-        let offset = 0;
-        let offset_h = Rc::new(RefCell::new(offset));
-        let offset_h2 = offset_h.clone();
-
-        let text = String::from("");
-        let text_h = Rc::new(RefCell::new(text));
-        let text_h2 = text_h.clone();
-
-        inner.draw(move |i| {
-            let mut offset = offset_h.borrow_mut();
-            let label = text_h.borrow();
-            let (text_width, _) = draw::measure(&label, false);
-
-            let os_two = if text_width >= i.w() {
-                text_width
-            } else {
-                // we reallllllly don't care if the width is less
-                *offset = 0;
-                0 
-            };
-
-            draw::push_clip(i.x(), i.y(), i.w(), i.h());
-            draw::draw_box(i.frame(), i.x(), i.y(), i.w(), i.h(), i.color());
-            draw::set_draw_color(Color::Black);
-            draw::set_font(Font::Helvetica, 14);
-            draw::draw_text(&*label, i.x() + *offset, i.y() + 12);
-
-            draw::draw_text(&*label, i.x() + *offset + i.width() + os_two, i.y() + 12);
-            draw::pop_clip();
-
-            if *offset + i.width() + os_two <= 0 {
-                *offset = 0;
-            }
-        });
-                
-        Self {
-            inner,
-            offset: offset_h2,
-            text: text_h2,
-            start_timer: 1,
-            each_timer: 0,
-        }
-    }
-    pub fn nudge(&mut self, offset: i32) {
-        *self.offset.borrow_mut() += offset;
-        self.redraw();
-    }
-    pub fn zero(&mut self) {
-        *self.offset.borrow_mut() = 0;
-        self.start_timer = 0;
-        self.redraw();
-    }
-    pub fn set_text(&mut self, text: &String) {
-        *self.text.borrow_mut() = text.to_owned();
-        self.redraw();
-    }
-    pub fn waited_long_enough(&mut self) -> bool {
-        const EACH_DELAY: usize = 4;
-        const START_DELAY: usize = 25;
-
-        let offset = *self.offset.borrow();
-
-        if self.start_timer > 0 {
-            if self.start_timer > START_DELAY {
-                self.start_timer = 0;
-                true
-            } else {
-                self.start_timer += 1;
-                false
-            }
-        } else {
-            if self.each_timer > EACH_DELAY {
-                if offset == 0 {
-                    self.start_timer = 1;
-                    self.each_timer = 0;
-                    false
-                } else {
-                    self.each_timer = 0;
-                    true
-                }
-            } else {
-                self.each_timer += 1;
-                false
-            }
-        }
-    }
 }
 
 #[cfg(target_os = "windows")]
