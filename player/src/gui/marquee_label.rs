@@ -38,7 +38,7 @@ impl MarqueeLabel {
             let (text_width, _) = draw::measure(&label, false);
 
             let os_two = if text_width >= i.w() {
-                text_width
+                text_width + 2
             } else {
                 // we reallllllly don't care if the width is less
                 *offset = 0;
