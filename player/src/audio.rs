@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
@@ -7,8 +6,10 @@ use cpal::{Sample, Stream};
 use opus::Decoder;
 use ringbuf::{LocalRb, Rb};
 
-use spectrum_analyzer;
-use spectrum_analyzer::scaling::{divide_by_N_sqrt, scale_to_zero_to_one, scale_20_times_log10};
+use protocol::AudioData;
+
+use crate::gui::visualizer::calculate_visualizer;
+use crate::AudioStatus;
 
 type Ringbuf<T> = LocalRb<T, Vec<MaybeUninit<T>>>;
 
@@ -138,13 +139,15 @@ impl Player {
         let buf = self.buffer.lock().unwrap();
         let copied = buf.as_slices();
 
-        let mut sbuf = [0.0;4096];
+        let mut sbuf = [0.0; 4096];
         if copied.0.len() > sbuf.len() {
             for (i, s) in copied.0.iter().step_by(2).enumerate() {
-                if i >= sbuf.len() { break }
+                if i >= sbuf.len() {
+                    break;
+                }
                 let summed = s + copied.0[i + 1] / 2.0;
                 sbuf[i] = summed;
-            } 
+            }
             Some(sbuf)
         } else {
             None
@@ -196,39 +199,129 @@ fn write_audio<T: Sample>(
     }
 }
 
-pub fn calculate_visualizer(samples: &[f32; 4096]) -> [u8; 14] {
-    let hamming_window = spectrum_analyzer::windows::hamming_window(samples);
-    let spectrum = spectrum_analyzer::samples_fft_to_spectrum(
-        &hamming_window,
-        48000,
-        spectrum_analyzer::FrequencyLimit::All,
-        Some(&scale_to_zero_to_one),
-    )
-    .unwrap();
+#[derive(Debug, Clone)]
+pub enum AudioCommand {
+    AudioData(AudioData),
+    StartLate(usize),
+    Clear,
+    Volume(f32),
+    Shutdown,
+}
 
-    let mut bars_float = [0.0; 14];
-    let min_freq = 20.0;
-    let max_freq = 20000.0;
+pub type AudioTx = std::sync::mpsc::Sender<AudioCommand>;
+pub type AudioRx = std::sync::mpsc::Receiver<AudioCommand>;
+pub type AudioStatusTx = tokio::sync::mpsc::UnboundedSender<AudioStatus>;
+pub type AudioStatusRx = tokio::sync::mpsc::UnboundedReceiver<AudioStatus>;
 
-    for (fr, fr_val) in spectrum.data().iter() {
-        let fr = fr.val();
-        if fr < 20.0 {
-            continue;
-        }
+pub struct AudioThreadHandle {
+    tx: AudioTx,
+}
 
-        let index = (-5.35062 * fr.log(0.06) - 6.36997).round().min(13.0) as usize;
-        //println!("{}, {}, {}", index, fr);
-
-        // made up scaling based on my subjective opinion on what looks kinda fine i guess
-        bars_float[index] += fr_val.val() * (4.5-fr.log10());
+impl AudioThreadHandle {
+    pub fn send(
+        &mut self,
+        cmd: AudioCommand,
+    ) -> Result<(), std::sync::mpsc::SendError<AudioCommand>> {
+        self.tx.send(cmd)
     }
-    //println!("{:?}", bars_float);
-    let bars: [u8; 14] = bars_float
-        .iter()
-        .map(|&num| (num as f32).round().min(8.0) as u8)
-        .collect::<Vec<u8>>()
-        .try_into()
-        .unwrap();
-    //println!("{:?}", bars);
-    bars
+}
+
+pub struct AudioThread {
+    rx: AudioRx,
+    tx: AudioStatusTx,
+    p: Player,
+    wants_play: bool,
+}
+
+impl AudioThread {
+    // pass in all the channel parts again
+    pub fn spawn(
+        audio_tx: AudioTx,
+        audio_rx: AudioRx,
+        audio_status_tx: &AudioStatusTx,
+    ) -> AudioThreadHandle {
+        let audio_status_tx = audio_status_tx.to_owned();
+
+        std::thread::spawn(move || {
+            let mut t = AudioThread::new(audio_rx, audio_status_tx);
+            t.run();
+        });
+
+        AudioThreadHandle { tx: audio_tx }
+    }
+
+    fn new(rx: AudioRx, tx: AudioStatusTx) -> Self {
+        let player = Player::new();
+
+        AudioThread {
+            rx,
+            tx,
+            p: player,
+            wants_play: false,
+        }
+    }
+
+    fn run(&mut self) {
+        while let Ok(data) = self.rx.recv() {
+            match data {
+                AudioCommand::AudioData(d) => match d {
+                    AudioData::Frame(frame) => {
+                        if frame.frame % 10 == 0 {
+                            self.tx
+                                .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()))
+                                .unwrap();
+                            self.tx
+                                .send(AudioStatus::Buffer(self.p.buffer_status()))
+                                .unwrap();
+                        }
+
+                        self.p.receive(frame.data);
+                        if let Some(samples) = self.p.get_visualizer_buffer() {
+                            let bars = calculate_visualizer(&samples);
+                            self.tx.send(AudioStatus::Visualizer(bars)).unwrap();
+                        }
+                    }
+                    AudioData::Start => {
+                        self.wants_play = true;
+                        self.p.fake_frames_received(0);
+                        self.tx.send(AudioStatus::Buffering).unwrap();
+                    }
+                    AudioData::Finish => {
+                        while !self.p.finish() {
+                            std::thread::sleep(std::time::Duration::from_millis(20));
+                        }
+                        self.p.pause();
+                        self.tx.send(AudioStatus::Finished).unwrap();
+                    }
+                    AudioData::Resume => {
+                        self.p.resume();
+                    }
+                },
+                AudioCommand::StartLate(frame_id) => {
+                    self.wants_play = true;
+                    self.p.fake_frames_received(frame_id);
+                }
+
+                AudioCommand::Clear => {
+                    self.tx.send(AudioStatus::Elapsed(0)).unwrap();
+                    self.p.clear();
+                }
+                AudioCommand::Volume(val) => {
+                    self.p.volume(val);
+                }
+                AudioCommand::Shutdown => break,
+            }
+            if self.p.is_ready() && self.wants_play {
+                self.wants_play = false;
+
+                self.tx.send(AudioStatus::DoneBuffering).unwrap();
+
+                if !self.p.is_started() {
+                    self.p.start()
+                } else {
+                    self.p.resume()
+                }
+            }
+        }
+    }
 }

@@ -13,9 +13,9 @@ use fltk::window::*;
 
 use crate::UIEvent;
 
-mod bitrate_bar;
-mod marquee_label;
-mod visualizer;
+pub mod bitrate_bar;
+pub mod marquee_label;
+pub mod visualizer;
 use self::bitrate_bar::*;
 use self::marquee_label::*;
 use self::visualizer::*;

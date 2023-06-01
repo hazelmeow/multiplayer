@@ -18,7 +18,8 @@ use protocol::{AudioFrame, TrackMetadata};
 
 use image::imageops::FilterType;
 
-use crate::AudioEngineData;
+use crate::audio::AudioTx;
+use crate::AudioCommand;
 
 pub struct AudioInfoReader {
     probe_result: ProbeResult,
@@ -154,8 +155,7 @@ impl AudioInfoReader {
                     } else {
                         md.art = None
                     }
-
-                },
+                }
 
                 _ => println!("unhandled media_type for visual: {}", v.media_type),
             }
@@ -338,10 +338,9 @@ pub enum TransmitCommand {
 
 //temp
 type MessageTx = tokio::sync::mpsc::UnboundedSender<Message>;
-type AudioTx = std::sync::mpsc::Sender<AudioEngineData>;
 
-type TransmitTx = tokio::sync::mpsc::UnboundedSender<TransmitCommand>;
-type TransmitRx = tokio::sync::mpsc::UnboundedReceiver<TransmitCommand>;
+pub type TransmitTx = tokio::sync::mpsc::UnboundedSender<TransmitCommand>;
+pub type TransmitRx = tokio::sync::mpsc::UnboundedReceiver<TransmitCommand>;
 
 pub struct TransmitThreadHandle {
     tx: TransmitTx,
@@ -409,7 +408,9 @@ impl TransmitThread {
     }
 
     fn send_both(&self, data: AudioData) {
-        self.audio_tx.send(AudioEngineData::AudioData(data.clone())).unwrap();
+        self.audio_tx
+            .send(AudioCommand::AudioData(data.clone()))
+            .unwrap();
         self.message_tx.send(Message::AudioData(data)).unwrap();
     }
 
@@ -461,7 +462,9 @@ impl TransmitThread {
                 if let Ok(frame) = f {
                     // borrow checker doesn't like self.send_both() here since we already borrow self or something
                     let data = AudioData::Frame(frame);
-                    self.audio_tx.send(AudioEngineData::AudioData(data.clone())).unwrap();
+                    self.audio_tx
+                        .send(AudioCommand::AudioData(data.clone()))
+                        .unwrap();
                     self.message_tx.send(Message::AudioData(data)).unwrap();
                 } else {
                     break; // we're done i guess

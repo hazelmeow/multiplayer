@@ -1,3 +1,4 @@
+use audio::{AudioStatusRx, AudioThreadHandle};
 use fltk::app;
 use fltk::image::JpegImage;
 use fltk::prelude::{BrowserExt, ImageExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
@@ -19,6 +20,8 @@ mod key;
 mod transmit;
 use transmit::{AudioInfoReader, TransmitCommand, TransmitThread, TransmitThreadHandle};
 
+use crate::audio::{AudioCommand, AudioThread};
+
 mod gui;
 
 struct Connection {
@@ -37,16 +40,14 @@ struct Connection {
     is_synced: bool,
 
     transmit: TransmitThreadHandle,
+    audio: AudioThreadHandle,
 
     // network messages
     message_rx: mpsc::UnboundedReceiver<Message>,
     message_tx: mpsc::UnboundedSender<Message>,
 
-    // transmit audio to playback subsystem
-    audio_tx: std::sync::mpsc::Sender<AudioEngineData>,
-
     // get status feedback from audio playing
-    audio_status_rx: mpsc::UnboundedReceiver<AudioStatus>,
+    audio_status_rx: AudioStatusRx,
 
     // from ui to logic
     ui_tx: mpsc::UnboundedSender<UIEvent>,
@@ -106,11 +107,13 @@ impl Connection {
 
         let (message_tx, message_rx) = mpsc::unbounded_channel::<Message>();
 
-        let (audio_tx, audio_rx) = std::sync::mpsc::channel::<AudioEngineData>();
-        let audio_status_rx = Self::run_audio(audio_rx);
+        let (audio_tx, audio_rx) = std::sync::mpsc::channel::<AudioCommand>();
+        let (audio_status_tx, audio_status_rx) = mpsc::unbounded_channel::<AudioStatus>();
 
         let (transmit_tx, transmit_rx) = tokio::sync::mpsc::unbounded_channel::<TransmitCommand>();
         let transmit = TransmitThread::spawn(transmit_tx, transmit_rx, &message_tx, &audio_tx);
+
+        let audio = AudioThread::spawn(audio_tx, audio_rx, &audio_status_tx);
 
         let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UIEvent>();
 
@@ -131,11 +134,11 @@ impl Connection {
 
             is_synced: false,
 
+            audio,
             transmit,
 
             message_rx,
             message_tx,
-            audio_tx,
             audio_status_rx,
             ui_rx,
             ui_tx,
@@ -154,81 +157,6 @@ impl Connection {
         } else {
             PlayState::Empty
         }
-    }
-
-    fn run_audio(
-        audio_rx: std::sync::mpsc::Receiver<AudioEngineData>,
-    ) -> mpsc::UnboundedReceiver<AudioStatus> {
-        // audio player thread
-
-        // status channel
-        let (tx, rx) = mpsc::unbounded_channel::<AudioStatus>();
-
-        std::thread::spawn(move || {
-            let mut p = audio::Player::new();
-
-            let mut wants_play = false;
-
-            while let Ok(data) = audio_rx.recv() {
-                match data {
-                    AudioEngineData::AudioData(d) => match d {
-                        AudioData::Frame(frame) => {
-                            if frame.frame % 10 == 0 {
-                                tx.send(AudioStatus::Elapsed(p.get_seconds_elapsed()))
-                                    .unwrap();
-                                tx.send(AudioStatus::Buffer(p.buffer_status())).unwrap();
-                            }
-
-                            p.receive(frame.data);
-                            if let Some(samples) = p.get_visualizer_buffer() {
-                                let bars = audio::calculate_visualizer(&samples);
-                                tx.send(AudioStatus::Visualizer(bars)).unwrap();
-                            }
-                        }
-                        AudioData::Start => {
-                            wants_play = true;
-                            p.fake_frames_received(0);
-                            tx.send(AudioStatus::Buffering).unwrap();
-                        }
-                        AudioData::Finish => {
-                            while !p.finish() {
-                                std::thread::sleep(std::time::Duration::from_millis(20));
-                            }
-                            p.pause();
-                            tx.send(AudioStatus::Finished).unwrap();
-                        }
-                        AudioData::Resume => {
-                            p.resume();
-                        }
-                    },
-                    AudioEngineData::StartLate(frame_id) => {
-                        wants_play = true;
-                        p.fake_frames_received(frame_id);
-                    }
-
-                    AudioEngineData::Clear => {
-                        tx.send(AudioStatus::Elapsed(0)).unwrap();
-                        p.clear();
-                    }
-                    AudioEngineData::Volume(val) => {
-                        p.volume(val);
-                    }
-                    AudioEngineData::Shutdown => break,
-                }
-                if p.is_ready() && wants_play {
-                    wants_play = false;
-
-                    tx.send(AudioStatus::DoneBuffering).unwrap();
-
-                    if !p.is_started() {
-                        p.start()
-                    } else {
-                        p.resume()
-                    }
-                }
-            }
-        });
-        return rx;
     }
 
     // lazy helper function
@@ -346,18 +274,18 @@ impl Connection {
                                         if !self.is_synced {
                                             // we're late.... try and catch up will you
                                             self.is_synced = true;
-                                            self.audio_tx.send(AudioEngineData::StartLate(f.frame as usize)).unwrap();
+                                            self.audio.send(AudioCommand::StartLate(f.frame as usize)).unwrap();
                                         }
 
-                                        self.audio_tx.send(AudioEngineData::AudioData(AudioData::Frame(f))).unwrap();
+                                        self.audio.send(AudioCommand::AudioData(AudioData::Frame(f))).unwrap();
                                     }
                                     protocol::AudioData::Start => {
                                         self.is_synced = true;
-                                        self.audio_tx.send(AudioEngineData::AudioData(data)).unwrap();
+                                        self.audio.send(AudioCommand::AudioData(data)).unwrap();
                                     }
                                     _ => {
                                         // forward to audio thread
-                                        self.audio_tx.send(AudioEngineData::AudioData(data)).unwrap();
+                                        self.audio.send(AudioCommand::AudioData(data)).unwrap();
                                     }
                                 }
 
@@ -414,7 +342,7 @@ impl Connection {
                             }
                         }
                         UIEvent::VolumeSlider(pos) => {
-                            self.audio_tx.send(AudioEngineData::Volume(pos)).unwrap();
+                            self.audio.send(AudioCommand::Volume(pos)).unwrap();
                         }
                         UIEvent::Test(text) => {
                             self.message_tx.send(Message::Text(text)).unwrap();
@@ -786,22 +714,13 @@ struct UIState {
 }
 
 #[derive(Debug, Clone)]
-enum AudioStatus {
+pub enum AudioStatus {
     Elapsed(usize),
     Buffering,
     DoneBuffering,
     Finished,
     Visualizer([u8; 14]),
     Buffer(u8),
-}
-
-#[derive(Debug, Clone)]
-pub enum AudioEngineData {
-    AudioData(AudioData),
-    StartLate(usize),
-    Clear,
-    Volume(f32),
-    Shutdown,
 }
 
 #[derive(Debug, PartialEq)]
