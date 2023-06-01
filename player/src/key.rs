@@ -6,21 +6,30 @@ use aes_gcm_siv::{
 use std::path::Path;
 use std::{error::Error, fs};
 
-// maybe we should move this somewhere else or not have it be another impl on Connection?
-impl crate::Connection {
-    pub fn load_key() -> Result<Aes256GcmSiv, Box<dyn Error>> {
+pub struct Key {
+    cipher: Aes256GcmSiv,
+}
+
+impl Key {
+    pub fn load() -> Result<Self, Box<dyn Error>> {
         // TODO: this probably shouldnt always be relative to the binary??
         let key_path = Path::new("./.key");
 
+        let cipher = Self::load_key(key_path)?;
+
+        Ok(Key { cipher })
+    }
+
+    fn load_key(key_path: &Path) -> Result<Aes256GcmSiv, Box<dyn Error>> {
         if key_path.exists() {
             let key = fs::read_to_string(key_path)?;
             let key: Vec<u8> = hex::decode(key.as_bytes())?;
             let key = GenericArray::from_slice(key.as_slice());
-            Ok(Aes256GcmSiv::new(key))
+            return Ok(Aes256GcmSiv::new(key));
         } else {
             let key = Aes256GcmSiv::generate_key(&mut OsRng);
             fs::write(key_path, hex::encode(key))?;
-            Ok(Aes256GcmSiv::new(&key))
+            return Ok(Aes256GcmSiv::new(&key));
         }
     }
 

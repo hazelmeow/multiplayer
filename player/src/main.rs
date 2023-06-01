@@ -1,9 +1,9 @@
-use aes_gcm_siv::Aes256GcmSiv;
 use fltk::app;
 use fltk::image::JpegImage;
 use fltk::prelude::{BrowserExt, ImageExt, ValuatorExt, WidgetBase, WidgetExt, WindowExt};
 use fltk::window::DoubleWindow;
 use futures::StreamExt;
+use key::Key;
 use protocol::network::FrameStream;
 use protocol::{AudioData, AuthenticateRequest, GetInfo, Message, Track, TrackArt};
 use std::collections::{HashMap, VecDeque};
@@ -25,7 +25,7 @@ struct Connection {
     stream: FrameStream,
     my_id: String,
 
-    cipher: Aes256GcmSiv,
+    key: Key,
 
     playing: Option<Track>,
     queue: VecDeque<Track>,
@@ -61,7 +61,7 @@ impl Connection {
         id: &String,
         ui_sender: fltk::app::Sender<UIEvent>,
     ) -> Result<Self, Box<dyn Error>> {
-        let cipher = Self::load_key().expect("failed to load key?");
+        let key = Key::load().expect("failed to load key?");
 
         let tcp_stream = TcpStream::connect(addr).await?;
         let mut stream = FrameStream::new(tcp_stream);
@@ -123,7 +123,7 @@ impl Connection {
             stream,
             my_id: id.to_string(),
 
-            cipher,
+            key,
 
             playing: None,
             queue: VecDeque::new(),
@@ -328,7 +328,7 @@ impl Connection {
 
                                         if let Some(t) = playing {
                                             if t.owner == self.my_id {
-                                                let path = self.decrypt_path(t.path).unwrap();
+                                                let path = self.key.decrypt_path(t.path).unwrap();
                                                 self.transmit.send(TransmitCommand::Start(path)).unwrap();
                                             }
                                         }
@@ -390,7 +390,7 @@ impl Connection {
                             if let Ok(mut reader) = AudioInfoReader::load(&file) {
                                 if let Ok((_, _, metadata)) = reader.read_info() {
                                     let track = protocol::Track {
-                                        path: self.encrypt_path(file).unwrap(),
+                                        path: self.key.encrypt_path(file).unwrap(),
                                         owner: self.my_id.clone(),
                                         metadata
                                     };
