@@ -282,7 +282,18 @@ impl AudioThread {
                     AudioData::Start => {
                         self.wants_play = true;
                         self.p.fake_frames_received(0);
-                        let _ = self.tx.send(AudioStatus::Buffering(true));
+
+                        // if we don't have enough buffer yet, wait
+                        // otherwise we had extra so we can just keep playing i guess?
+                        // TODO: maybe this threshold should be lower so we can catch up only when we're actually low instead of every time we get a little low??
+                        if !self.p.is_ready() {
+                            let _ = self.tx.send(AudioStatus::Buffering(true));
+
+                            // if we're continuing from another song, pause until we have enough
+                            if self.p.is_started() {
+                                self.p.pause();
+                            }
+                        }
                     }
                     AudioData::Finish => {
                         while !self.p.finish() {
