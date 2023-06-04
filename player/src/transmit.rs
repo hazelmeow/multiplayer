@@ -333,6 +333,7 @@ impl AudioReader {
 pub enum TransmitCommand {
     Start(String),
     Stop,
+    Shutdown,
 }
 
 //temp
@@ -340,6 +341,9 @@ type MessageTx = tokio::sync::mpsc::UnboundedSender<Message>;
 
 pub type TransmitTx = tokio::sync::mpsc::UnboundedSender<TransmitCommand>;
 pub type TransmitRx = tokio::sync::mpsc::UnboundedReceiver<TransmitCommand>;
+
+type ShutdownTx = tokio::sync::mpsc::UnboundedSender<()>;
+type ShutdownRx = tokio::sync::mpsc::UnboundedReceiver<()>;
 
 pub struct TransmitThreadHandle {
     tx: TransmitTx,
@@ -359,6 +363,8 @@ pub struct TransmitThread {
     rx: TransmitRx,
     message_tx: MessageTx,
     audio_tx: AudioTx,
+    shutdown_tx: ShutdownTx,
+    shutdown_rx: ShutdownRx,
 
     audio_reader: Option<AudioReader>,
     interval: Interval,
@@ -396,10 +402,14 @@ impl TransmitThread {
         // LOL OK it's two frames idk why maybe because it's stereo interleaved??????
         let interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
 
+        let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::unbounded_channel();
+
         TransmitThread {
             rx,
             message_tx,
             audio_tx,
+            shutdown_tx,
+            shutdown_rx,
 
             audio_reader: None,
             interval,
@@ -419,6 +429,8 @@ impl TransmitThread {
                 Some(cmd) = self.rx.recv() => self.handle_command(cmd),
 
                 _ = self.interval.tick() => self.handle_tick(),
+
+                _ = self.shutdown_rx.recv() => break,
             }
         }
     }
@@ -444,6 +456,9 @@ impl TransmitThread {
                 if let Some(t) = self.audio_reader.as_mut() {
                     t.set_finished();
                 }
+            }
+            TransmitCommand::Shutdown => {
+                self.shutdown_tx.send(()).unwrap();
             }
         }
     }

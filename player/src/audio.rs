@@ -267,31 +267,29 @@ impl AudioThread {
                 AudioCommand::AudioData(d) => match d {
                     AudioData::Frame(frame) => {
                         if frame.frame % 10 == 0 {
-                            self.tx
-                                .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()))
-                                .unwrap();
-                            self.tx
-                                .send(AudioStatus::Buffer(self.p.buffer_status()))
-                                .unwrap();
+                            let _ = self
+                                .tx
+                                .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()));
+                            let _ = self.tx.send(AudioStatus::Buffer(self.p.buffer_status()));
                         }
 
                         self.p.receive(frame.data);
                         if let Some(samples) = self.p.get_visualizer_buffer() {
                             let bars = calculate_visualizer(&samples);
-                            self.tx.send(AudioStatus::Visualizer(bars)).unwrap();
+                            let _ = self.tx.send(AudioStatus::Visualizer(bars));
                         }
                     }
                     AudioData::Start => {
                         self.wants_play = true;
                         self.p.fake_frames_received(0);
-                        self.tx.send(AudioStatus::Buffering(true)).unwrap();
+                        let _ = self.tx.send(AudioStatus::Buffering(true));
                     }
                     AudioData::Finish => {
                         while !self.p.finish() {
                             std::thread::sleep(std::time::Duration::from_millis(20));
                         }
                         self.p.pause();
-                        self.tx.send(AudioStatus::Finished).unwrap();
+                        let _ = self.tx.send(AudioStatus::Finished);
                     }
                     AudioData::Resume => {
                         self.p.resume();
@@ -303,18 +301,20 @@ impl AudioThread {
                 }
 
                 AudioCommand::Clear => {
-                    self.tx.send(AudioStatus::Elapsed(0)).unwrap();
+                    let _ = self.tx.send(AudioStatus::Elapsed(0));
                     self.p.clear();
                 }
                 AudioCommand::Volume(val) => {
                     self.p.volume(val);
                 }
-                AudioCommand::Shutdown => break,
+                AudioCommand::Shutdown => {
+                    break;
+                }
             }
             if self.p.is_ready() && self.wants_play {
                 self.wants_play = false;
 
-                self.tx.send(AudioStatus::Buffering(false)).unwrap();
+                let _ = self.tx.send(AudioStatus::Buffering(false));
 
                 if !self.p.is_started() {
                     self.p.start()

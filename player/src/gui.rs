@@ -40,6 +40,7 @@ pub enum UIEvent {
     BtnNext,
     BtnPrev,
     BtnQueue,
+    BtnConnect,
     VolumeSlider(f32),
     VolumeUp,
     VolumeDown,

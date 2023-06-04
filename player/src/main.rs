@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 
 use audio::{AudioStatusRx, AudioThreadHandle};
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use gui::UIThreadHandle;
 use key::Key;
 use protocol::network::FrameStream;
@@ -173,6 +173,7 @@ async fn main() -> std::io::Result<()> {
 
     // pass stuff in for now
     let mut t = MainThread::setup(addr, my_id).await;
+    t.connect().await; // temporary
     t.run().await;
 
     println!("exiting");
@@ -193,13 +194,11 @@ impl MainThread {
     async fn setup(addr: &str, my_id: String) -> Self {
         let ui_thread = UIThread::spawn(my_id.to_owned());
 
-        let connection = Connection::create(addr, &my_id).await.unwrap();
-
         MainThread {
             addr: addr.to_owned(),
             my_id: my_id,
             ui: ui_thread,
-            connection: Some(connection),
+            connection: None,
 
             loading_count: 0,
         }
@@ -210,21 +209,11 @@ impl MainThread {
         self.update_ui_status();
 
         let mut ui_interval = tokio::time::interval(tokio::time::Duration::from_millis(50));
-        // let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(5));
-        // tokio::pin!(timeout);
 
         loop {
             tokio::select! {
-                // () = &mut timeout => {
-                //     let connection = Connection::create(&self.addr, &self.my_id).await.unwrap();
-                //     self.connection= Some(connection);
-                // }
-
                 // something to send
-                // Some(msg) = self.connection.get_message_rx().recv() => {
                 Some(msg) = maybe_message_rx(&self.connection) => {
-                // Some(Some(msg)) = OptionFuture::from(self.connection.as_mut().map(|c| c.message_rx.recv())) => {
-                // Some(Some(msg)) = self.connection.message_rx.recv() => {
                     let c = self.connection.as_mut().unwrap();
                     c.stream.borrow_mut().send(&msg).await.unwrap();
                 },
@@ -333,11 +322,19 @@ impl MainThread {
                         }
 
                         None => {
-                            // socket disconnected
-                            // TODO: if connection is none then we didnt get disconnected anyway we shouldnt break
-                            // just unset connection or something maybe
-                            // println!("socket disconnected");
-                            // break;
+                            if let Some(c) = self.connection.as_mut() {
+                                // socket was disconnected (either forcefully or because we closed it)
+                                // shutdown other threads
+                                c.transmit.send(TransmitCommand::Shutdown).unwrap();
+                                c.audio.send(AudioCommand::Shutdown).unwrap();
+
+                                // unset connection now
+                                self.connection = None;
+
+                                self.update_ui_status();
+                            } else {
+                                // we dont have a connection right now so dont do anything
+                            }
                         }
                     }
 
@@ -346,6 +343,15 @@ impl MainThread {
                 // some ui event
                 Some(event) = self.ui.ui_rx.recv() => {
                     match event {
+                        UIEvent::BtnConnect => {
+                            // awaiting here will block the loop maybe???
+                            if self.connection.is_some() {
+                                self.disconnect().await;
+                            } else {
+                                self.connect().await;
+                            }
+                        }
+
                         UIEvent::Play(path) => {
                             if let Some(conn) = self.connection.as_mut() {
                                 // temporary api lol
@@ -372,7 +378,6 @@ impl MainThread {
                                 self.loading_count -= 1;
                                 //self.update_ui_status();
                             }
-
                         }
                         UIEvent::Pause => {
 
@@ -456,12 +461,15 @@ impl MainThread {
         }
     }
 
-    fn connect() {
-        todo!();
+    async fn connect(&mut self) {
+        let connection = Connection::create(&self.addr, &self.my_id).await.unwrap();
+        self.connection = Some(connection);
     }
 
-    fn disconnect() {
-        todo!();
+    async fn disconnect(&mut self) {
+        if let Some(c) = &mut self.connection {
+            c.stream.borrow_mut().get_inner().close().await.unwrap();
+        }
     }
 }
 
