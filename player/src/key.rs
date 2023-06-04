@@ -1,10 +1,10 @@
+use std::path::Path;
+use std::{error::Error, fs};
+
 use aes_gcm_siv::{
     aead::{generic_array::GenericArray, Aead, KeyInit, OsRng},
     Aes256GcmSiv, Nonce,
 };
-
-use std::path::Path;
-use std::{error::Error, fs};
 
 pub struct Key {
     cipher: Aes256GcmSiv,

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::io::Cursor;
 
+use image::imageops::FilterType;
 use opus::Encoder;
 use rubato::{InterpolationParameters, Resampler, SincFixedOut};
 use symphonia::core::audio::SampleBuffer;
@@ -15,8 +16,6 @@ use tokio::time::Interval;
 
 use protocol::{AudioData, Message, TrackArt};
 use protocol::{AudioFrame, TrackMetadata};
-
-use image::imageops::FilterType;
 
 use crate::audio::AudioTx;
 use crate::AudioCommand;

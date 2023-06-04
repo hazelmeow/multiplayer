@@ -284,7 +284,7 @@ impl AudioThread {
                     AudioData::Start => {
                         self.wants_play = true;
                         self.p.fake_frames_received(0);
-                        self.tx.send(AudioStatus::Buffering).unwrap();
+                        self.tx.send(AudioStatus::Buffering(true)).unwrap();
                     }
                     AudioData::Finish => {
                         while !self.p.finish() {
@@ -314,7 +314,7 @@ impl AudioThread {
             if self.p.is_ready() && self.wants_play {
                 self.wants_play = false;
 
-                self.tx.send(AudioStatus::DoneBuffering).unwrap();
+                self.tx.send(AudioStatus::Buffering(false)).unwrap();
 
                 if !self.p.is_started() {
                     self.p.start()

@@ -1148,6 +1148,7 @@ version = "0.1.0"
 dependencies = [
  "aes-gcm-siv",
  "bincode",
+ "bytes",
  "cpal",
  "fltk",
  "fltk-theme",
