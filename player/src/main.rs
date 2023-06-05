@@ -161,10 +161,13 @@ async fn maybe_tcp_message(t: &Option<Connection>) -> Option<Result<bytes::Bytes
             let result = stream.get_inner().next().await;
 
             match result {
-                Some(r) => {
-                    let b = r.expect("tcp stream error");
-                    Some(Ok(b))
-                }
+                Some(r) => match r {
+                    Ok(b) => Some(Ok(b)),
+                    Err(e) => {
+                        println!("tcp stream error: {:?}", e);
+                        Some(Err(()))
+                    }
+                },
                 // stream disconnected
                 // we need to differentiate from nothing happening
                 None => Some(Err(())),
