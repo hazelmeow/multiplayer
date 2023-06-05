@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::Mutex;
 
 use fltk::app;
 use fltk::app::App;
@@ -69,6 +67,7 @@ pub enum UIUpdateEvent {
     Periodic,
 }
 
+#[derive(Default)]
 struct DragState {
     x: i32,
     y: i32,
@@ -162,28 +161,20 @@ impl UIThread {
     }
 
     fn run(&mut self) {
-        let drag_state = Rc::new(Mutex::new(DragState {
-            x: 0,
-            y: 0,
-            dnd: false,
-            released: false,
-        }));
-
-        let drag_state_2 = drag_state.clone();
+        let mut drag_state_main = DragState::default();
         let sender1 = self.sender.clone();
         self.gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(drag_state_2.clone(), sender1.clone(), w, ev)
+            Self::handle_window_event(&mut drag_state_main, sender1.clone(), w, ev)
         });
 
+        let mut drag_state_queue = DragState::default();
         let sender2 = self.sender.clone();
         self.queue_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(drag_state.clone(), sender2.clone(), w, ev)
+            Self::handle_window_event(&mut drag_state_queue, sender2.clone(), w, ev)
         });
 
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
-                //println!("got event from app: {:?}", msg);
-
                 // forward event to logic thread for handling
                 // TODO: don't send stuff it doesn't need? like UIUpdateEvent?
                 self.tx.send(msg.clone()).unwrap();
@@ -355,22 +346,19 @@ impl UIThread {
     }
 
     fn handle_window_event(
-        state_mutex: Rc<Mutex<DragState>>,
+        state: &mut DragState,
         sender: Sender<UIEvent>,
         w: &mut DoubleWindow,
         ev: Event,
     ) -> bool {
         match ev {
             fltk::enums::Event::Push => {
-                let mut state = state_mutex.lock().unwrap();
                 let coords = app::event_coords();
                 state.x = coords.0;
                 state.y = coords.1;
                 true
             }
             fltk::enums::Event::Drag => {
-                let state = state_mutex.lock().unwrap();
-
                 //if y < 20 {
                 w.set_pos(app::event_x_root() - state.x, app::event_y_root() - state.y);
                 true
@@ -379,19 +367,16 @@ impl UIThread {
                 //}
             }
             fltk::enums::Event::DndEnter => {
-                let mut state = state_mutex.lock().unwrap();
                 println!("blah");
                 state.dnd = true;
                 true
             }
             fltk::enums::Event::DndDrag => true,
             fltk::enums::Event::DndRelease => {
-                let mut state = state_mutex.lock().unwrap();
                 state.released = true;
                 true
             }
             fltk::enums::Event::Paste => {
-                let mut state = state_mutex.lock().unwrap();
                 if state.dnd && state.released {
                     for path in app::event_text().split("\n") {
                         let path = path.trim().replace("file://", "");
@@ -410,7 +395,6 @@ impl UIThread {
                 }
             }
             fltk::enums::Event::DndLeave => {
-                let mut state = state_mutex.lock().unwrap();
                 state.dnd = false;
                 state.released = false;
                 true
