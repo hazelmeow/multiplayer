@@ -386,6 +386,18 @@ async fn handle_message(
 
                     Ok(())
                 }
+                protocol::GetInfo::Room => {
+                    let m = match peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) {
+                        Some(room) => {
+                            Message::Info(protocol::Info::Room(Some(RoomOptions { name: room.name.clone() })))
+                        }
+                        None => {
+                            Message::Info(protocol::Info::Room(None))
+                        }
+                    };
+                    peer.stream.send(&m).await?;
+                    Ok(())
+                }
             }
         }
 

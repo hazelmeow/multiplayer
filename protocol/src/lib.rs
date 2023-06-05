@@ -47,6 +47,7 @@ pub enum Info {
     ConnectedUsers(HashMap<String, String>),
     TrackDuration(u64),
     TrackTitle(String),
+    Room(Option<RoomOptions>)
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -54,6 +55,7 @@ pub enum GetInfo {
     Playing,
     Queue,
     ConnectedUsers,
+    Room
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

@@ -295,6 +295,9 @@ impl MainThread {
                                             c.connected_users = list;
                                             self.ui.update(UIUpdateEvent::UpdateUserList(c.connected_users.clone()));
                                         }
+                                        protocol::Info::Room(opts) => {
+                                            self.ui.update(UIUpdateEvent::UpdateRoomName(opts.map(|o| o.name)));
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -363,6 +366,10 @@ impl MainThread {
                                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
                                 s.send(&Message::JoinRoom(0)).await.unwrap();
+
+                                s.send(&Message::GetInfo(GetInfo::Room)).await.unwrap();
+                                s.send(&Message::GetInfo(GetInfo::ConnectedUsers)).await.unwrap();
+
 
                                 drop(s);
 

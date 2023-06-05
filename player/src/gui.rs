@@ -57,6 +57,7 @@ pub enum UIEvent {
 pub enum UIUpdateEvent {
     SetTime(usize, usize),
     UpdateUserList(HashMap<String, String>),
+    UpdateRoomName(Option<String>),
     UpdateQueue(Option<Track>, VecDeque<Track>),
     Status(String),
     Visualizer([u8; 14]),
@@ -95,6 +96,7 @@ pub struct UIThread {
     tx: UiTx,
 
     my_id: String,
+    room_name: Option<String>,
 
     gui: MainWindow,
     queue_gui: QueueWindow,
@@ -154,6 +156,7 @@ impl UIThread {
             tx,
 
             my_id,
+            room_name: None,
 
             gui,
             queue_gui,
@@ -227,6 +230,7 @@ impl UIThread {
                         }
                         UIUpdateEvent::UpdateUserList(val) => {
                             self.gui.users.clear();
+                            self.gui.users.add(&format!("[{}]", self.room_name.clone().unwrap_or("no room".into())));
                             for (id, name) in val.iter() {
                                 let line = if id == &self.my_id {
                                     format!("@b* you")
@@ -240,6 +244,9 @@ impl UIThread {
                                 self.gui.users.size(),
                                 self.queue_gui.queue_browser.size(),
                             ));
+                        }
+                        UIUpdateEvent::UpdateRoomName(val) => {
+                            self.room_name = val;
                         }
                         UIUpdateEvent::UpdateQueue(current, queue) => {
                             self.queue_gui.queue_browser.clear();
