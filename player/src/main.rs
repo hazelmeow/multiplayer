@@ -182,10 +182,7 @@ async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let my_id = args[1].clone();
 
-    let addr = "127.0.0.1:8080";
-
-    // pass stuff in for now
-    let mut t = MainThread::setup(addr, my_id).await;
+    let mut t = MainThread::setup(my_id).await;
     // t.connect().await; // temporary
     t.run().await;
 
@@ -195,7 +192,6 @@ async fn main() -> std::io::Result<()> {
 }
 
 struct MainThread {
-    addr: String,
     my_id: String,
     ui: UIThreadHandle,
     connection: Option<Connection>,
@@ -204,11 +200,10 @@ struct MainThread {
 }
 
 impl MainThread {
-    async fn setup(addr: &str, my_id: String) -> Self {
+    async fn setup(my_id: String) -> Self {
         let ui_thread = UIThread::spawn(my_id.to_owned());
 
         MainThread {
-            addr: addr.to_owned(),
             my_id: my_id,
             ui: ui_thread,
             connection: None,
