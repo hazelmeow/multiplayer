@@ -7,7 +7,7 @@ use futures::{SinkExt, StreamExt};
 use gui::UIThreadHandle;
 use key::Key;
 use protocol::network::FrameStream;
-use protocol::{AudioData, AuthenticateRequest, GetInfo, Message, Track, TrackArt};
+use protocol::{AudioData, GetInfo, Message, RoomOptions, Track, TrackArt};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -87,10 +87,10 @@ impl Connection {
         println!("connecting as {:?}", my_id);
 
         stream
-            .send(&Message::Authenticate(AuthenticateRequest {
+            .send(&Message::Authenticate {
                 id: my_id.clone(),
                 name: my_id.clone().repeat(5), // TODO temp
-            }))
+            })
             .await
             .unwrap();
 
@@ -154,11 +154,21 @@ async fn maybe_audio_status_rx(t: &Option<Connection>) -> Option<AudioStatus> {
     }
 }
 
-async fn get_stream(t: &Option<Connection>) -> Option<Result<bytes::BytesMut, std::io::Error>> {
+async fn maybe_tcp_message(t: &Option<Connection>) -> Option<Result<bytes::BytesMut, ()>> {
     match t {
         Some(c) => {
-            let mut r = c.stream.borrow_mut();
-            r.get_inner().next().await
+            let mut stream = c.stream.borrow_mut();
+            let result = stream.get_inner().next().await;
+
+            match result {
+                Some(r) => {
+                    let b = r.expect("tcp stream error");
+                    Some(Ok(b))
+                }
+                // stream disconnected
+                // we need to differentiate from nothing happening
+                None => Some(Err(())),
+            }
         }
         None => None,
     }
@@ -173,7 +183,7 @@ async fn main() -> std::io::Result<()> {
 
     // pass stuff in for now
     let mut t = MainThread::setup(addr, my_id).await;
-    t.connect().await; // temporary
+    // t.connect().await; // temporary
     t.run().await;
 
     println!("exiting");
@@ -249,9 +259,9 @@ impl MainThread {
                 },
 
                 // tcp message
-                result = get_stream(&self.connection) => {
-                    match result {
-                        Some(Ok(bytes)) => {
+                Some(maybe_message) = maybe_tcp_message(&self.connection) => {
+                    match maybe_message {
+                        Ok(bytes) => {
                             let c = self.connection.as_mut().unwrap();
 
                             let msg: Message =
@@ -316,12 +326,7 @@ impl MainThread {
                                 }
                             }
                         }
-
-                        Some(Err(e)) => {
-                            println!("error occurred while processing message: {:?}", e)
-                        }
-
-                        None => {
+                        Err(()) => {
                             if let Some(c) = self.connection.as_mut() {
                                 // socket was disconnected (either forcefully or because we closed it)
                                 // shutdown other threads
@@ -337,8 +342,7 @@ impl MainThread {
                             }
                         }
                     }
-
-                },
+                }
 
                 // some ui event
                 Some(event) = self.ui.ui_rx.recv() => {
@@ -349,6 +353,20 @@ impl MainThread {
                                 self.disconnect().await;
                             } else {
                                 self.connect().await;
+
+                                // TEMP
+                                let mut s = self.connection.as_mut().unwrap().stream.borrow_mut();
+                                s.send(&Message::CreateRoom(RoomOptions {
+                                    name: "test".into(),
+                                })).await.unwrap();
+
+                                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+
+                                s.send(&Message::JoinRoom(0)).await.unwrap();
+
+                                drop(s);
+
+                                self.update_ui_status();
                             }
                         }
 
@@ -389,7 +407,6 @@ impl MainThread {
                                     if p.owner == self.my_id {
                                         conn.transmit.send(TransmitCommand::Stop).unwrap();
                                     }
-
                                 }
                             }
                         }

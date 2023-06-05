@@ -41,12 +41,6 @@ pub struct TrackMetadata {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct AuthenticateRequest {
-    pub id: String,
-    pub name: String,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Info {
     Playing(Option<Track>),
     Queue(VecDeque<Track>),
@@ -63,9 +57,17 @@ pub enum GetInfo {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RoomOptions {
+    pub name: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {
     Handshake(String),
-    Authenticate(AuthenticateRequest),
+    Authenticate { id: String, name: String },
+
+    JoinRoom(usize),
+    CreateRoom(RoomOptions),
 
     AudioData(AudioData),
 
