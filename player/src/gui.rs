@@ -25,7 +25,9 @@ pub mod main_window;
 pub mod marquee_label;
 pub mod queue_window;
 pub mod visualizer;
+pub mod connection_window;
 
+use self::connection_window::ConnectionWindow;
 use self::main_window::*;
 use self::queue_window::QueueWindow;
 
@@ -39,6 +41,7 @@ pub enum UIEvent {
     BtnPrev,
     BtnQueue,
     BtnConnect,
+    Connect(String),
     VolumeSlider(f32),
     VolumeUp,
     VolumeDown,
@@ -48,6 +51,7 @@ pub enum UIEvent {
     Test(String),
     GetInfo(GetInfo),
     HideQueue,
+    HideConnectionWindow,
     Quit,
 
     Update(UIUpdateEvent),
@@ -100,6 +104,7 @@ pub struct UIThread {
 
     gui: MainWindow,
     queue_gui: QueueWindow,
+    connection_gui: ConnectionWindow,
 }
 
 impl UIThread {
@@ -130,6 +135,7 @@ impl UIThread {
 
         let mut gui = MainWindow::make_window(sender.clone());
         let mut queue_gui = QueueWindow::make_window(sender.clone());
+        let mut connection_gui = ConnectionWindow::make_window(sender.clone());
 
         // stuff for cool custom titlebars
         gui.main_win.set_border(false);
@@ -160,6 +166,7 @@ impl UIThread {
 
             gui,
             queue_gui,
+            connection_gui
         }
     }
 
@@ -173,6 +180,12 @@ impl UIThread {
         let mut drag_state_queue = DragState::default();
         let sender2 = self.sender.clone();
         self.queue_gui.main_win.handle(move |w, ev| {
+            Self::handle_window_event(&mut drag_state_queue, sender2.clone(), w, ev)
+        });
+
+        let mut drag_state_queue = DragState::default();
+        let sender2 = self.sender.clone();
+        self.connection_gui.main_win.handle(move |w, ev| {
             Self::handle_window_event(&mut drag_state_queue, sender2.clone(), w, ev)
         });
 
@@ -330,12 +343,18 @@ impl UIThread {
                     UIEvent::BtnNext => {}
                     UIEvent::BtnPrev => {}
 
+                    UIEvent::BtnConnect => {
+                        self.connection_gui.main_win.show();
+                    }
                     UIEvent::BtnQueue => {
                         self.queue_gui.main_win.show();
                         //ui_tx.send(UIEvent::Update(UIUpdateEvent::UpdateQueue(self.queue.clone())));
                     }
                     UIEvent::HideQueue => {
                         self.queue_gui.main_win.hide();
+                    }
+                    UIEvent::HideConnectionWindow => {
+                        self.connection_gui.main_win.hide();
                     }
                     UIEvent::Quit => break,
                     UIEvent::Test(s) => {

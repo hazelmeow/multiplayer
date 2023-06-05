@@ -350,17 +350,17 @@ impl MainThread {
                 // some ui event
                 Some(event) = self.ui.ui_rx.recv() => {
                     match event {
-                        UIEvent::BtnConnect => {
+                        UIEvent::Connect(addr) => {
                             // awaiting here will block the loop maybe???
                             if self.connection.is_some() {
                                 self.disconnect().await;
                             } else {
-                                self.connect().await;
+                                self.connect(addr).await;
 
                                 // TEMP
                                 let mut s = self.connection.as_mut().unwrap().stream.borrow_mut();
                                 s.send(&Message::CreateRoom(RoomOptions {
-                                    name: "test".into(),
+                                    name: "test room".into(),
                                 })).await.unwrap();
 
                                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -485,8 +485,8 @@ impl MainThread {
         }
     }
 
-    async fn connect(&mut self) {
-        let connection = Connection::create(&self.addr, &self.my_id).await.unwrap();
+    async fn connect(&mut self, addr: String) {
+        let connection = Connection::create(&addr, &self.my_id).await.unwrap();
         self.connection = Some(connection);
     }
 
