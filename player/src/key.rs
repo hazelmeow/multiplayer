@@ -33,7 +33,7 @@ impl Key {
         }
     }
 
-    pub fn encrypt_path(&self, path: String) -> Result<Vec<u8>, aes_gcm_siv::Error> {
+    pub fn encrypt_path(&self, path: &String) -> Result<Vec<u8>, aes_gcm_siv::Error> {
         // we could do something like
         //     let mut nonce = [0u8; 12];
         //     OsRng.fill_bytes(&mut nonce);

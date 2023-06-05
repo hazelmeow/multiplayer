@@ -45,7 +45,7 @@ pub enum UIEvent {
     VolumeSlider(f32),
     VolumeUp,
     VolumeDown,
-    Play(PathBuf),
+    DroppedFiles(String),
     Stop,
     Pause,
     Test(String),
@@ -404,14 +404,7 @@ impl UIThread {
             }
             fltk::enums::Event::Paste => {
                 if state.dnd && state.released {
-                    for path in app::event_text().split("\n") {
-                        let path = path.trim().replace("file://", "");
-                        let path = std::path::PathBuf::from(&path);
-
-                        if path.exists() {
-                            sender.send(UIEvent::Play(path.clone()));
-                        }
-                    }
+                    sender.send(UIEvent::DroppedFiles(app::event_text()));
                     state.dnd = false;
                     state.released = false;
                     true

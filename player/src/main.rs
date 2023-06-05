@@ -3,6 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 
 use audio::{AudioStatusRx, AudioThreadHandle};
+use futures::future::join_all;
 use futures::{SinkExt, StreamExt};
 use gui::UIThreadHandle;
 use key::Key;
@@ -319,7 +320,6 @@ impl MainThread {
                                             c.audio.send(AudioCommand::AudioData(data)).unwrap();
                                         }
                                     }
-
                                 },
 
                                 _ => {
@@ -368,39 +368,75 @@ impl MainThread {
                                 s.send(&Message::GetInfo(GetInfo::Room)).await.unwrap();
                                 s.send(&Message::GetInfo(GetInfo::ConnectedUsers)).await.unwrap();
 
-
                                 drop(s);
 
                                 self.update_ui_status();
                             }
                         }
 
-                        UIEvent::Play(path) => {
-                            if let Some(conn) = self.connection.as_mut() {
-                                // temporary api lol
-                                // can open?
-                                // TODO: this blocks and fucks everything up if it takes too long to read....
-                                self.loading_count += 1;
-                                // TODO ----------------------------------------------------------------------------------------------------
-                                //self.update_ui_status();
+                        UIEvent::DroppedFiles(data) => {
+                            let paths: Vec<std::path::PathBuf> = data
+                                .split("\n")
+                                .map(|p| std::path::PathBuf::from(p.trim().replace("file://", "")))
+                                .filter(|p| p.exists())
+                                .collect();
 
-                                let file = path.into_os_string().into_string().unwrap();
+                            let num_tracks = paths.len();
+                            self.loading_count += num_tracks;
+                            self.update_ui_status();
 
-                                if let Ok(mut reader) = AudioInfoReader::load(&file) {
-                                    if let Ok((_, _, metadata)) = reader.read_info() {
-                                        let track = protocol::Track {
-                                            path: conn.key.encrypt_path(file).unwrap(),
-                                            owner: self.my_id.clone(),
-                                            metadata
-                                        };
+                            let Some(conn) = self.connection.as_mut() else {
+                                self.loading_count -= num_tracks;
+                                self.update_ui_status();
+                                return
+                            };
 
-                                        conn.message_tx.send(Message::QueuePush(track)).unwrap();
-                                    }
-                                }
+                            let tasks: Vec<tokio::task::JoinHandle<Option<Track>>> = paths
+                                .into_iter()
+                                .map(|p| {
+                                    let file = p.into_os_string().into_string().unwrap();
+                                    let encrypted_path = conn.key.encrypt_path(&file).unwrap();
+                                    let my_id = self.my_id.clone();
 
-                                self.loading_count -= 1;
-                                //self.update_ui_status();
+                                    tokio::spawn(async move {
+                                        if let Ok(mut reader) = AudioInfoReader::load(&file) {
+                                            if let Ok((_, _, metadata)) = reader.read_info() {
+                                                let track = protocol::Track {
+                                                    path: encrypted_path,
+                                                    owner: my_id,
+                                                    metadata
+                                                };
+
+                                                Some(track)
+                                            } else {
+                                                None
+                                            }
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                })
+                                .collect();
+
+                            let mut tracks = join_all(tasks).await.into_iter().filter_map(|t| match t {
+                                Ok(Some(t)) => Some(t),
+                                _ => None
+                            }).collect::<Vec<Track>>();
+
+                            tracks.sort_by_key(|t| {
+                                let s = t.metadata.track_no.clone().unwrap_or_default();
+                                let n = s.split("/").nth(0).unwrap().parse::<usize>().unwrap_or_default();
+                                (t.metadata.album.clone().unwrap_or_default(), n)
+                            });
+
+                            for t in tracks {
+                                conn.message_tx.send(Message::QueuePush(t)).unwrap();
                             }
+
+                            drop(conn);
+
+                            self.loading_count -= num_tracks;
+                            self.update_ui_status();
                         }
                         UIEvent::Pause => {
 
