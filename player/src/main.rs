@@ -155,7 +155,7 @@ async fn maybe_audio_status_rx(t: &Option<Connection>) -> Option<AudioStatus> {
     }
 }
 
-async fn maybe_tcp_message(t: &Option<Connection>) -> Option<Result<bytes::BytesMut, ()>> {
+async fn maybe_tcp_message(t: &Option<Connection>) -> Option<Result<Message, ()>> {
     match t {
         Some(c) => {
             let mut stream = c.stream.borrow_mut();
@@ -163,7 +163,13 @@ async fn maybe_tcp_message(t: &Option<Connection>) -> Option<Result<bytes::Bytes
 
             match result {
                 Some(r) => match r {
-                    Ok(b) => Some(Ok(b)),
+                    Ok(bytes) => match bincode::deserialize::<Message>(&bytes) {
+                        Ok(msg) => Some(Ok(msg)),
+                        Err(e) => {
+                            println!("failed to deserialize message: {:?}", e);
+                            Some(Err(()))
+                        }
+                    },
                     Err(e) => {
                         println!("tcp stream error: {:?}", e);
                         Some(Err(()))
@@ -174,6 +180,8 @@ async fn maybe_tcp_message(t: &Option<Connection>) -> Option<Result<bytes::Bytes
                 None => Some(Err(())),
             }
         }
+
+        // nothing happened yet
         None => None,
     }
 }
@@ -258,89 +266,81 @@ impl MainThread {
                 },
 
                 // tcp message
-                Some(maybe_message) = maybe_tcp_message(&self.connection) => {
-                    match maybe_message {
-                        Ok(bytes) => {
-                            let c = self.connection.as_mut().unwrap();
+                Some(message_or_disconnect) = maybe_tcp_message(&self.connection) => {
+                    if let Ok(message) = message_or_disconnect {
+                        let c = self.connection.as_mut().unwrap();
 
-                            let msg: Message =
-                                bincode::deserialize(&bytes).expect("failed to deserialize message");
+                        match message {
+                            Message::Info(info) => {
+                                match info {
+                                    protocol::Info::Queue(queue) => {
+                                        // TODO
+                                        println!("got queue: {:?}", queue);
+                                        self.ui.update(UIUpdateEvent::UpdateQueue(c.playing.clone(), queue.clone()));
+                                        c.queue = queue;
+                                    },
+                                    protocol::Info::Playing(playing) => {
+                                        // TODO
+                                        println!("got playing: {:?}", playing);
 
-                            match msg {
-                                Message::Info(
-                                    info
-                                ) => {
-                                    match info {
-                                        protocol::Info::Queue(queue) => {
-                                            // TODO
-                                            println!("got queue: {:?}", queue);
-                                            self.ui.update(UIUpdateEvent::UpdateQueue(c.playing.clone(), queue.clone()));
-                                            c.queue = queue;
-                                        },
-                                        protocol::Info::Playing(playing) => {
-                                            // TODO
-                                            println!("got playing: {:?}", playing);
+                                        c.playing = playing.clone();
 
-                                            c.playing = playing.clone();
-
-                                            if let Some(t) = playing {
-                                                if t.owner == self.my_id {
-                                                    let path = c.key.decrypt_path(t.path).unwrap();
-                                                    c.transmit.send(TransmitCommand::Start(path)).unwrap();
-                                                }
+                                        if let Some(t) = playing {
+                                            if t.owner == self.my_id {
+                                                let path = c.key.decrypt_path(t.path).unwrap();
+                                                c.transmit.send(TransmitCommand::Start(path)).unwrap();
                                             }
-                                        },
-                                        protocol::Info::ConnectedUsers(list) => {
-                                            c.connected_users = list;
-                                            self.ui.update(UIUpdateEvent::UpdateUserList(c.connected_users.clone()));
                                         }
-                                        protocol::Info::Room(opts) => {
-                                            self.ui.update(UIUpdateEvent::UpdateRoomName(opts.map(|o| o.name)));
-                                        }
-                                        _ => {}
+                                    },
+                                    protocol::Info::ConnectedUsers(list) => {
+                                        c.connected_users = list;
+                                        self.ui.update(UIUpdateEvent::UpdateUserList(c.connected_users.clone()));
                                     }
+                                    protocol::Info::Room(opts) => {
+                                        self.ui.update(UIUpdateEvent::UpdateRoomName(opts.map(|o| o.name)));
+                                    }
+                                    _ => {}
                                 }
-                                Message::AudioData(data) => {
-                                    match data {
-                                        protocol::AudioData::Frame(f) => {
-                                            if !c.is_synced {
-                                                // we're late.... try and catch up will you
-                                                c.is_synced = true;
-                                                c.audio.send(AudioCommand::StartLate(f.frame as usize)).unwrap();
-                                            }
-
-                                            c.audio.send(AudioCommand::AudioData(AudioData::Frame(f))).unwrap();
-                                        }
-                                        protocol::AudioData::Start => {
+                            }
+                            Message::AudioData(data) => {
+                                match data {
+                                    protocol::AudioData::Frame(f) => {
+                                        if !c.is_synced {
+                                            // we're late.... try and catch up will you
                                             c.is_synced = true;
-                                            c.audio.send(AudioCommand::AudioData(data)).unwrap();
+                                            c.audio.send(AudioCommand::StartLate(f.frame as usize)).unwrap();
                                         }
-                                        _ => {
-                                            // forward to audio thread
-                                            c.audio.send(AudioCommand::AudioData(data)).unwrap();
-                                        }
-                                    }
-                                },
 
-                                _ => {
-                                    println!("received message: {:?}", msg);
+                                        c.audio.send(AudioCommand::AudioData(AudioData::Frame(f))).unwrap();
+                                    }
+                                    protocol::AudioData::Start => {
+                                        c.is_synced = true;
+                                        c.audio.send(AudioCommand::AudioData(data)).unwrap();
+                                    }
+                                    _ => {
+                                        // forward to audio thread
+                                        c.audio.send(AudioCommand::AudioData(data)).unwrap();
+                                    }
                                 }
+                            },
+
+                            _ => {
+                                println!("received message: {:?}", message);
                             }
                         }
-                        Err(()) => {
-                            if let Some(c) = self.connection.as_mut() {
-                                // socket was disconnected (either forcefully or because we closed it)
-                                // shutdown other threads
-                                c.transmit.send(TransmitCommand::Shutdown).unwrap();
-                                c.audio.send(AudioCommand::Shutdown).unwrap();
+                    } else {
+                        if let Some(c) = self.connection.as_mut() {
+                            // socket was disconnected (either forcefully or because we closed it)
+                            // shutdown other threads
+                            c.transmit.send(TransmitCommand::Shutdown).unwrap();
+                            c.audio.send(AudioCommand::Shutdown).unwrap();
 
-                                // unset connection now
-                                self.connection = None;
+                            // unset connection now
+                            self.connection = None;
 
-                                self.update_ui_status();
-                            } else {
-                                // we dont have a connection right now so dont do anything
-                            }
+                            self.update_ui_status();
+                        } else {
+                            // we dont have a connection right now so dont do anything
                         }
                     }
                 }
