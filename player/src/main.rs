@@ -8,7 +8,7 @@ use futures::{SinkExt, StreamExt};
 use gui::UIThreadHandle;
 use key::Key;
 use protocol::network::FrameStream;
-use protocol::{AudioData, GetInfo, Message, RoomOptions, Track, TrackArt};
+use protocol::{AudioData, GetInfo, Message, RoomListing, RoomOptions, Track};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 
@@ -53,6 +53,25 @@ struct Connection {
     audio_status_rx: RefCell<AudioStatusRx>,
 }
 impl Connection {
+    async fn query_room_list(addr: &str) -> Result<Vec<RoomListing>, Box<dyn Error>> {
+        let tcp_stream = TcpStream::connect(addr).await?;
+        let mut stream = FrameStream::new(tcp_stream);
+
+        stream.send(&Message::QueryRoomList).await.unwrap();
+
+        let response = timeout(
+            std::time::Duration::from_millis(1000),
+            stream.get_inner().next(),
+        )
+        .await?;
+
+        let Some(Ok(bytes)) = response else { return Err("bad response".into()) };
+
+        let message: Message = bincode::deserialize(&bytes)?;
+        let protocol::Message::Info(protocol::Info::RoomList(room_list)) = message else { return Err("unexpected response".into()) };
+        Ok(room_list)
+    }
+
     async fn create(addr: &str, my_id: &String) -> Result<Self, Box<dyn Error>> {
         let key = Key::load().expect("failed to load key?");
 
