@@ -45,9 +45,7 @@ pub enum Info {
     Playing(Option<Track>),
     Queue(VecDeque<Track>),
     ConnectedUsers(HashMap<String, String>),
-    TrackDuration(u64),
-    TrackTitle(String),
-    Room(Option<RoomOptions>)
+    Room(Option<RoomOptions>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -55,7 +53,7 @@ pub enum GetInfo {
     Playing,
     Queue,
     ConnectedUsers,
-    Room
+    Room,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
