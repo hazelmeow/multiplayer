@@ -224,6 +224,8 @@ struct MainThread {
     ui: UIThreadHandle,
     connection: Option<Connection>,
 
+    volume: f32,
+
     loading_count: usize,
 }
 
@@ -235,6 +237,8 @@ impl MainThread {
             my_id: my_id,
             ui: ui_thread,
             connection: None,
+
+            volume: 0.5,
 
             loading_count: 0,
         }
@@ -471,9 +475,18 @@ impl MainThread {
                             }
                         }
                         UIEvent::VolumeSlider(pos) => {
-                            if let Some(conn) = &mut self.connection {
-                                conn.audio.send(AudioCommand::Volume(pos)).unwrap();
-                            }
+                            self.volume = pos;
+                            self.try_update_volume();
+                        }
+                        UIEvent::VolumeUp => {
+                            self.volume = (self.volume + 0.02).min(1.);
+                            self.ui.update(UIUpdateEvent::Volume(self.volume));
+                            self.try_update_volume();
+                        }
+                        UIEvent::VolumeDown => {
+                            self.volume = (self.volume - 0.02).max(0.);
+                            self.ui.update(UIUpdateEvent::Volume(self.volume));
+                            self.try_update_volume();
                         }
                         UIEvent::Test(text) => {
                             if let Some(conn) = &mut self.connection {
@@ -485,12 +498,6 @@ impl MainThread {
                                 conn.message_tx.send(Message::GetInfo(i)).unwrap();
                             }
                         },
-                        UIEvent::VolumeUp => {
-                            self.ui.update(UIUpdateEvent::VolumeUp);
-                        }
-                        UIEvent::VolumeDown => {
-                            self.ui.update(UIUpdateEvent::VolumeDown);
-                        }
                         UIEvent::Quit => break,
                         _ => {}
                     }
@@ -500,6 +507,17 @@ impl MainThread {
                     self.ui.update(UIUpdateEvent::Periodic);
                 },
             }
+        }
+    }
+
+    fn volume_scale(val: f32) -> f32 {
+        val.powf(3.)
+    }
+
+    fn try_update_volume(&mut self) {
+        if let Some(conn) = &mut self.connection {
+            let scaled = Self::volume_scale(self.volume);
+            conn.audio.send(AudioCommand::Volume(scaled)).unwrap();
         }
     }
 
@@ -541,6 +559,8 @@ impl MainThread {
     async fn connect(&mut self, addr: String) {
         let connection = Connection::create(&addr, &self.my_id).await.unwrap();
         self.connection = Some(connection);
+
+        self.try_update_volume();
     }
 
     async fn disconnect(&mut self) {

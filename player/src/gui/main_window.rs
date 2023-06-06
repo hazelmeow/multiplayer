@@ -169,7 +169,7 @@ impl MainWindow {
         volume_slider.set_step(0.01, 1);
         let tmp = s.clone();
         volume_slider.set_callback(move |vs| {
-            tmp.send(UIEvent::VolumeSlider(Self::volume_scale(vs.value())));
+            tmp.send(UIEvent::VolumeSlider(vs.value() as f32));
         });
         main_win.add(&volume_slider);
 
@@ -201,10 +201,6 @@ impl MainWindow {
             volume_slider,
             art_frame,
         }
-    }
-
-    pub fn volume_scale(val: f64) -> f32 {
-        val.powf(3.) as f32
     }
 
     #[cfg(not(target_os = "windows"))]

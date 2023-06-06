@@ -67,8 +67,7 @@ pub enum UIUpdateEvent {
     Visualizer([u8; 14]),
     Buffer(u8),
     Bitrate(usize),
-    VolumeUp,
-    VolumeDown,
+    Volume(f32),
     Periodic,
 }
 
@@ -150,8 +149,8 @@ impl UIThread {
 
         // blehhhh this is all such a mess
         gui.volume_slider.set_value(0.5);
-        tx.send(UIEvent::VolumeSlider(MainWindow::volume_scale(0.5)))
-            .unwrap();
+        // TODO: we should load the initial value from stored preferences or something
+        tx.send(UIEvent::VolumeSlider(0.5)).unwrap();
 
         gui.lbl_title.set_text(&"hi, welcome >.<".to_string());
 
@@ -216,30 +215,13 @@ impl UIThread {
                         UIUpdateEvent::Status(val) => {
                             self.gui.status_field.set_label(&val);
                         }
+                        UIUpdateEvent::Volume(val) => {
+                            self.gui.volume_slider.set_value(val.into());
+                        }
                         UIUpdateEvent::Periodic => {
                             if self.gui.lbl_title.waited_long_enough() {
                                 self.gui.lbl_title.nudge(-4);
                             }
-                        }
-                        UIUpdateEvent::VolumeUp => {
-                            self.gui
-                                .volume_slider
-                                .set_value((self.gui.volume_slider.value() + 0.02).min(1.));
-                            self.tx
-                                .send(UIEvent::VolumeSlider(MainWindow::volume_scale(
-                                    self.gui.volume_slider.value(),
-                                )))
-                                .unwrap();
-                        }
-                        UIUpdateEvent::VolumeDown => {
-                            self.gui
-                                .volume_slider
-                                .set_value((self.gui.volume_slider.value() - 0.02).max(0.));
-                            self.tx
-                                .send(UIEvent::VolumeSlider(MainWindow::volume_scale(
-                                    self.gui.volume_slider.value(),
-                                )))
-                                .unwrap();
                         }
                         UIUpdateEvent::UpdateUserList(val) => {
                             self.gui.users.clear();
