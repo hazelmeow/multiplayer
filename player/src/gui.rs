@@ -287,10 +287,10 @@ impl UIThread {
                                 );
                                 self.gui.lbl_title.zero();
 
-                                self.gui.lbl_data1.set_label(
+                                self.gui.lbl_artist.set_label(
                                     track
                                         .metadata
-                                        .artist
+                                        .album_artist
                                         .as_ref()
                                         .unwrap_or(&"[unknown artist]".to_string()),
                                 );

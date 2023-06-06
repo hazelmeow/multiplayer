@@ -137,6 +137,13 @@ impl AudioInfoReader {
             }
         }
 
+        // default albumartist to artist if necessary & possible
+        if md.album_artist.is_none() {
+            if let Some(artist) = &md.artist {
+                md.album_artist = Some(artist.clone());
+            }
+        }
+
         // just assume there's only one visual in the file?
         if let Some(v) = visuals.first() {
             match v.media_type.as_str() {

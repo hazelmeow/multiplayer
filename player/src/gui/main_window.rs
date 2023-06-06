@@ -24,7 +24,7 @@ pub struct MainWindow {
     pub users: Browser,
     pub lbl_time: Frame,
     pub lbl_title: MarqueeLabel,
-    pub lbl_data1: Frame,
+    pub lbl_artist: Frame,
     pub visualizer: Visualizer,
     pub bitrate_bar: BitrateBar,
     pub volume_slider: HorSlider,
@@ -142,10 +142,10 @@ impl MainWindow {
         let lbl_title = MarqueeLabel::new(105, 35, 120);
         display.add(&*lbl_title);
 
-        let mut lbl_data1 = Frame::new(103, 50, 120, 16, "...");
-        lbl_data1.set_label_size(10);
-        lbl_data1.set_align(Align::Left | Align::Inside);
-        display.add(&lbl_data1);
+        let mut lbl_artist = Frame::new(103, 50, 120, 16, "...");
+        lbl_artist.set_label_size(10);
+        lbl_artist.set_align(Align::Left | Align::Inside);
+        display.add(&lbl_artist);
 
         let mut lbl_time = Frame::new(29, 35, 80, 16, "00:00");
         //lbl_time.set_label_font(Font::Courier);
@@ -195,7 +195,7 @@ impl MainWindow {
             users,
             lbl_time,
             lbl_title,
-            lbl_data1,
+            lbl_artist,
             visualizer,
             bitrate_bar,
             volume_slider,
