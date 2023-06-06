@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
 use protocol::network::FrameStream;
-use protocol::{Message, RoomOptions, Track};
+use protocol::{Message, RoomListing, RoomOptions, Track};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -114,6 +114,19 @@ impl Shared {
             names: HashMap::new(),
         }
     }
+
+    fn room_list_info(&self) -> Message {
+        let list: Vec<RoomListing> = self
+            .rooms
+            .iter()
+            .map(|(room_id, room)| RoomListing {
+                id: *room_id,
+                name: room.name.clone(),
+            })
+            .collect();
+
+        Message::Info(protocol::Info::RoomList(list))
+    }
 }
 
 struct PeerHandle {
@@ -177,6 +190,13 @@ async fn handle_connection(
                     return Ok(());
                 }
             }
+            Message::QueryRoomList => {
+                let state = state.lock().await;
+                stream.send(&state.room_list_info()).await?;
+
+                return Ok(());
+            }
+
             _ => {
                 // wrong message type
                 return Ok(());
@@ -388,14 +408,16 @@ async fn handle_message(
                 }
                 protocol::GetInfo::Room => {
                     let m = match peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) {
-                        Some(room) => {
-                            Message::Info(protocol::Info::Room(Some(RoomOptions { name: room.name.clone() })))
-                        }
-                        None => {
-                            Message::Info(protocol::Info::Room(None))
-                        }
+                        Some(room) => Message::Info(protocol::Info::Room(Some(RoomOptions {
+                            name: room.name.clone(),
+                        }))),
+                        None => Message::Info(protocol::Info::Room(None)),
                     };
                     peer.stream.send(&m).await?;
+                    Ok(())
+                }
+                protocol::GetInfo::RoomList => {
+                    peer.stream.send(&state.room_list_info()).await?;
                     Ok(())
                 }
             }
@@ -434,6 +456,7 @@ async fn handle_message(
         }
 
         // should not be reached
+        Message::QueryRoomList => Ok(()),
         Message::Handshake(_) => Ok(()),
         Message::Authenticate { id, name } => Ok(()),
         Message::Info(_) => Ok(()),

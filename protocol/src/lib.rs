@@ -46,6 +46,7 @@ pub enum Info {
     Queue(VecDeque<Track>),
     ConnectedUsers(HashMap<String, String>),
     Room(Option<RoomOptions>),
+    RoomList(Vec<RoomListing>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -54,6 +55,14 @@ pub enum GetInfo {
     Queue,
     ConnectedUsers,
     Room,
+    RoomList,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RoomListing {
+    pub id: usize,
+    pub name: String,
+    // pub options: RoomOptions, //?
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -63,6 +72,8 @@ pub struct RoomOptions {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {
+    QueryRoomList,
+
     Handshake(String),
     Authenticate { id: String, name: String },
 
