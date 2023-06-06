@@ -309,7 +309,7 @@ async fn handle_authenticated_connection(
     }
 
     // client disconnected gracefully
-    handle_disconnect(state, peer).await;
+    handle_disconnect(state, &mut peer).await;
 
     Ok(())
 }
@@ -463,19 +463,14 @@ async fn handle_message(
     }
 }
 
-async fn handle_disconnect(state: Arc<Mutex<Shared>>, peer: Peer) {
+async fn handle_disconnect(state: Arc<Mutex<Shared>>, peer: &mut Peer) {
+    // remove them from the room cleanly and notify others
+    leave_room(state.clone(), peer).await;
+
+    // remove name from the map
     let mut state = state.lock().await;
     state.names.remove(&peer.id);
-    let names = state.names.clone();
 
-    if let Some(room_id) = peer.room_id {
-        let room = state.rooms.get_mut(&room_id).unwrap();
-
-        room.peers.remove(&peer.id);
-
-        let msg = room.connected_users_info(names);
-        room.broadcast(&msg).await;
-    }
-
-    // TODO: notify waiting peers of new room list
+    // remove handle
+    state.waiting_peers.remove(&peer.id);
 }
