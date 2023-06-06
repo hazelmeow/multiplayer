@@ -461,6 +461,17 @@ impl MainThread {
                             self.loading_count -= num_tracks;
                             self.update_ui_status();
                         }
+
+                        UIEvent::BtnNext => {
+                            let Some(conn) = &mut self.connection else { continue };
+
+                            if let Some(p) = &conn.playing {
+                                if p.owner == self.my_id {
+                                    conn.transmit.send(TransmitCommand::Stop).unwrap();
+                                }
+                            }
+                        }
+
                         UIEvent::Pause => {
 
                         }
