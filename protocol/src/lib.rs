@@ -45,7 +45,7 @@ pub enum Info {
     Playing(Option<Track>),
     Queue(VecDeque<Track>),
     ConnectedUsers(HashMap<String, String>),
-    Room(Option<RoomOptions>),
+    Room(Option<RoomListing>),
     RoomList(Vec<RoomListing>),
 }
 
@@ -62,6 +62,7 @@ pub enum GetInfo {
 pub struct RoomListing {
     pub id: usize,
     pub name: String,
+    pub user_names: Vec<String>
     // pub options: RoomOptions, //?
 }
 
@@ -78,6 +79,7 @@ pub enum Message {
     Authenticate { id: String, name: String },
 
     JoinRoom(usize),
+    LeaveRoom,
     CreateRoom(RoomOptions),
 
     AudioData(AudioData),

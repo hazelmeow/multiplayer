@@ -21,11 +21,13 @@ use protocol::Track;
 use protocol::TrackArt;
 
 pub mod bitrate_bar;
+pub mod connection_window;
 pub mod main_window;
 pub mod marquee_label;
 pub mod queue_window;
 pub mod visualizer;
-pub mod connection_window;
+
+use crate::Connection;
 
 use self::connection_window::ConnectionWindow;
 use self::main_window::*;
@@ -40,8 +42,9 @@ pub enum UIEvent {
     BtnNext,
     BtnPrev,
     BtnQueue,
-    BtnConnect,
+    BtnOpenConnectionDialog,
     Connect(String),
+    JoinRoom(usize),
     VolumeSlider(f32),
     VolumeUp,
     VolumeDown,
@@ -55,6 +58,7 @@ pub enum UIEvent {
     Quit,
 
     Update(UIUpdateEvent),
+    ConnectionDlg(ConnectionDlgEvent),
 }
 
 #[derive(Debug, Clone)]
@@ -63,12 +67,22 @@ pub enum UIUpdateEvent {
     UpdateUserList(HashMap<String, String>),
     UpdateRoomName(Option<String>),
     UpdateQueue(Option<Track>, VecDeque<Track>),
+    UpdateConnectionTree(Vec<self::connection_window::Server>),
+    UpdateConnectionTreePartial(self::connection_window::Server),
     Status(String),
     Visualizer([u8; 14]),
     Buffer(u8),
     Bitrate(usize),
     Volume(f32),
     Periodic,
+}
+
+#[derive(Debug, Clone)]
+pub enum ConnectionDlgEvent {
+    BtnConnect,
+    BtnNewRoom,
+    BtnRefresh,
+    AddServer(String),
 }
 
 #[derive(Default)]
@@ -165,7 +179,7 @@ impl UIThread {
 
             gui,
             queue_gui,
-            connection_gui
+            connection_gui,
         }
     }
 
@@ -225,7 +239,10 @@ impl UIThread {
                         }
                         UIUpdateEvent::UpdateUserList(val) => {
                             self.gui.users.clear();
-                            self.gui.users.add(&format!("[{}]", self.room_name.clone().unwrap_or("no room".into())));
+                            self.gui.users.add(&format!(
+                                "[{}]",
+                                self.room_name.clone().unwrap_or("no room".into())
+                            ));
                             for (id, name) in val.iter() {
                                 let line = if id == &self.my_id {
                                     format!("@b* you")
@@ -308,9 +325,46 @@ impl UIThread {
                                 self.queue_gui.queue_browser.size(),
                             ));
                         }
+                        UIUpdateEvent::UpdateConnectionTree(list) => {
+                            self.connection_gui.populate(list);
+                        }
+                        UIUpdateEvent::UpdateConnectionTreePartial(server) => {
+                            self.connection_gui.update_just_one_server(server);
+                        }
                         _ => {
                             dbg!(evt);
                         }
+                    },
+                    UIEvent::ConnectionDlg(evt) => match evt {
+                        ConnectionDlgEvent::BtnConnect => {
+                            if let Some(item) = self.connection_gui.tree.first_selected_item() {
+                                let (maybe_room_id, server_addr): (Option<usize>, String) =
+                                    match item.depth() {
+                                        1 => unsafe {
+                                            // server selected
+                                            (
+                                                None,
+                                                item.user_data().unwrap(),
+                                            )
+                                        },
+                                        2 => unsafe {
+                                            // room selected
+                                            (
+                                                Some(item.user_data().unwrap()),
+                                                item.parent().unwrap().user_data().unwrap(),
+                                            )
+                                        },
+                                        _ => unreachable!(),
+                                    };
+
+                                self.tx.send(UIEvent::Connect(server_addr)).unwrap();
+                                if let Some(room_id) = maybe_room_id {
+                                    self.tx.send(UIEvent::JoinRoom(room_id)).unwrap();
+                                }
+                            }
+                        }
+                        ConnectionDlgEvent::AddServer(_) => todo!(),
+                        _ => {}
                     },
                     UIEvent::BtnPlay => {
                         // play button behaviour:
@@ -325,8 +379,9 @@ impl UIThread {
                     UIEvent::BtnNext => {}
                     UIEvent::BtnPrev => {}
 
-                    UIEvent::BtnConnect => {
+                    UIEvent::BtnOpenConnectionDialog => {
                         self.connection_gui.main_win.show();
+                        self.tx.send(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh)).unwrap();
                     }
                     UIEvent::BtnQueue => {
                         self.queue_gui.main_win.show();

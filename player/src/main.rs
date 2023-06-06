@@ -19,7 +19,7 @@ mod transmit;
 use transmit::{AudioInfoReader, TransmitCommand, TransmitThread, TransmitThreadHandle};
 
 use crate::audio::{AudioCommand, AudioThread};
-use crate::gui::{UIEvent, UIThread, UIUpdateEvent};
+use crate::gui::{ConnectionDlgEvent, UIEvent, UIThread, UIUpdateEvent};
 
 mod gui;
 
@@ -29,6 +29,7 @@ type MessageTx = tokio::sync::mpsc::UnboundedSender<Message>;
 struct Connection {
     stream: RefCell<FrameStream>,
     my_id: String,
+    addr: String,
 
     key: Key,
 
@@ -36,6 +37,7 @@ struct Connection {
     queue: VecDeque<Track>,
     connected_users: HashMap<String, String>,
     buffering: bool,
+    room: Option<usize>,
 
     // we only need to use this once, when we first connect
     // if we see the start message -> we are in sync
@@ -133,6 +135,7 @@ impl Connection {
         Ok(Self {
             stream: RefCell::new(stream),
             my_id: my_id.to_owned(),
+            addr: addr.to_owned(),
 
             key,
 
@@ -140,6 +143,7 @@ impl Connection {
             queue: VecDeque::new(),
             connected_users: HashMap::new(),
             buffering: false,
+            room: None,
 
             is_synced: false,
 
@@ -320,9 +324,18 @@ impl MainThread {
                                         self.ui.update(UIUpdateEvent::UpdateUserList(c.connected_users.clone()));
                                     }
                                     protocol::Info::Room(opts) => {
+                                        c.room = opts.clone().map(|o| o.id); // fixme
                                         self.ui.update(UIUpdateEvent::UpdateRoomName(opts.map(|o| o.name)));
                                     }
-                                    _ => {}
+                                    protocol::Info::RoomList(list) => {
+                                        let name = c.addr.split(":").next().unwrap();
+                                        let s = crate::gui::connection_window::Server {
+                                            name: name.into(),
+                                            addr: c.addr.clone(),
+                                            rooms: Some(list),
+                                        };
+                                        self.ui.update(UIUpdateEvent::UpdateConnectionTreePartial(s));
+                                    }
                                 }
                             }
                             Message::AudioData(data) => {
@@ -372,6 +385,57 @@ impl MainThread {
                 Some(event) = self.ui.ui_rx.recv() => {
                     match event {
                         UIEvent::Connect(addr) => {
+                            if self.connection.is_none() {
+                                self.connect(addr).await;
+                            }
+                            if let Some(c) = self.connection.as_mut() {
+                                c.stream.borrow_mut().send(&Message::GetInfo(protocol::GetInfo::RoomList)).await.unwrap();
+                            }
+                        }
+
+                        UIEvent::JoinRoom(room_id) => {
+                            if self.connection.is_none() { continue };
+                            let room = self.connection.as_ref().unwrap().room.clone();
+                            let mut s = self.connection.as_mut().unwrap().stream.borrow_mut();
+
+                            if room.is_some() {
+                                s.send(&Message::LeaveRoom).await.unwrap();
+
+                            }
+                            s.send(&Message::JoinRoom(room_id)).await.unwrap();
+                        }
+
+                        UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh) => {
+                            let servers_tmp = vec!["127.0.0.1:8080"];
+                            let mut servers: Vec<crate::gui::connection_window::Server> = vec![];
+                            for addr in servers_tmp {
+                                let name = addr.split(":").next().unwrap();
+                                let rooms_future = Connection::query_room_list(addr);
+                                let mut s = crate::gui::connection_window::Server {
+                                    name: name.into(),
+                                    addr: addr.into(),
+                                    rooms: None,
+                                };
+                                if let Ok(rooms) = rooms_future.await {
+                                    s.rooms = Some(rooms);
+                                }
+                                servers.push(s);
+                            }
+                            println!("sending event: {:?}", servers);
+                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers));
+                        },
+
+                        UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnNewRoom) => {
+                            if self.connection.is_none() { continue; };
+                            let mut s = self.connection.as_mut().unwrap().stream.borrow_mut();
+                            s.send(&Message::CreateRoom(RoomOptions {
+                                name: "meow room".into(),
+                            })).await.unwrap();
+                            drop(s);
+
+                            self.update_ui_status();
+                        },
+                        /* UIEvent::Connect(addr) => {
                             // awaiting here will block the loop maybe???
                             if self.connection.is_some() {
                                 self.disconnect().await;
@@ -395,7 +459,7 @@ impl MainThread {
 
                                 self.update_ui_status();
                             }
-                        }
+                        } */
 
                         UIEvent::DroppedFiles(data) => {
                             let paths: Vec<std::path::PathBuf> = data

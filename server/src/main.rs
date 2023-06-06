@@ -92,6 +92,10 @@ impl Room {
         names.retain(|id, _| self.peers.contains_key(id));
         Message::Info(protocol::Info::ConnectedUsers(names))
     }
+    fn room_users(&self, mut names: HashMap<Id, String>) -> Vec<String> {
+        names.retain(|id, _| self.peers.contains_key(id));
+        names.keys().into_iter().map(|x| x.to_owned()).collect()
+    }
 }
 
 struct Shared {
@@ -122,6 +126,11 @@ impl Shared {
             .map(|(room_id, room)| RoomListing {
                 id: *room_id,
                 name: room.name.clone(),
+                user_names: room
+                    .peers
+                    .keys()
+                    .map(|id| self.names.get(id).unwrap().to_owned())
+                    .collect(),
             })
             .collect();
 
@@ -246,12 +255,15 @@ async fn leave_room(state: Arc<Mutex<Shared>>, peer: &mut Peer) {
     let connected_users = room.connected_users_info(names);
     room.broadcast(&connected_users).await;
 
+    peer.stream.send(&Message::Info(protocol::Info::Room(None))).await.unwrap();
+
     state.waiting_peers.insert(peer.id.clone(), handle);
 }
 
-async fn join_room(state: Arc<Mutex<Shared>>, peer: &mut Peer, room_id: usize) {
-    let mut state = state.lock().await;
+async fn join_room(state_mutex: Arc<Mutex<Shared>>, peer: &mut Peer, room_id: usize) {
+    let mut state = state_mutex.lock().await;
     let names = state.names.clone();
+    let names2 = state.names.clone(); // blehhh
 
     let Some(handle) = state.waiting_peers.remove(&peer.id) else { return };
 
@@ -265,10 +277,17 @@ async fn join_room(state: Arc<Mutex<Shared>>, peer: &mut Peer, room_id: usize) {
     room.broadcast(&connected_users).await;
 
     // notify new peer of current playing track and queue
+    let room_info = protocol::Info::Room(Some(RoomListing { id: room_id, name: room.name.clone(), user_names: room.room_users(names2) }));
+    peer.stream.send(&Message::Info(room_info)).await.unwrap();
     let playing = room.playing_info();
     peer.stream.send(&playing).await.unwrap();
     let queue = room.queue_info();
     peer.stream.send(&queue).await.unwrap();
+
+    drop(state);
+    let state = state_mutex.lock().await;
+    let room_list_info = state.room_list_info();
+    peer.stream.send(&room_list_info).await.unwrap();
 }
 
 async fn handle_authenticated_connection(
@@ -334,6 +353,11 @@ async fn handle_message(
 
         Message::JoinRoom(room_id) => {
             join_room(state, peer, *room_id).await;
+            Ok(())
+        }
+
+        Message::LeaveRoom => {
+            leave_room(state, peer).await;
             Ok(())
         }
 
@@ -412,13 +436,7 @@ async fn handle_message(
                     Ok(())
                 }
                 protocol::GetInfo::Room => {
-                    let m = match peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) {
-                        Some(room) => Message::Info(protocol::Info::Room(Some(RoomOptions {
-                            name: room.name.clone(),
-                        }))),
-                        None => Message::Info(protocol::Info::Room(None)),
-                    };
-                    peer.stream.send(&m).await?;
+                    
                     Ok(())
                 }
                 protocol::GetInfo::RoomList => {

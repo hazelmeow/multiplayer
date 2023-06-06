@@ -178,7 +178,7 @@ impl MainWindow {
         main_win.add(&users);
 
         let mut btn_connect = Button::new(main_win.width() - 85 - 46, 26, 24, 24, "Cn");
-        btn_connect.emit(s.clone(), UIEvent::BtnConnect);
+        btn_connect.emit(s.clone(), UIEvent::BtnOpenConnectionDialog);
         main_win.add(&btn_connect);
 
         let mut btn_queue = Button::new(main_win.width() - 85 - 46, 26 + 24 + 2, 24, 24, "Qu");
