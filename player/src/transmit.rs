@@ -459,10 +459,12 @@ impl TransmitThread {
                 }
             }
             TransmitCommand::Stop => {
-                self.send_both(AudioData::Finish);
-                if let Some(t) = self.audio_reader.as_mut() {
-                    t.set_finished();
-                }
+                // see the other comment for why we don't send it directly to the audio thread
+                self.message_tx
+                    .send(Message::AudioData(AudioData::Finish))
+                    .unwrap();
+
+                self.audio_reader = None;
             }
             TransmitCommand::Shutdown => {
                 self.shutdown_tx.send(()).unwrap();
@@ -494,6 +496,9 @@ impl TransmitThread {
 
             // we encoded the entire file
             if t.finished() {
+                // don't send AudioData::Finish to ourselves BECAUSE
+                // we only want the audio thread to get finish if there's nothing to play
+                // the server checks if something new is queued and intercepts the Finish message
                 self.message_tx
                     .send(Message::AudioData(AudioData::Finish))
                     .unwrap();

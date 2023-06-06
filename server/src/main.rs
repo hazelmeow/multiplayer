@@ -9,7 +9,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
 use protocol::network::FrameStream;
-use protocol::{Message, RoomListing, RoomOptions, Track};
+use protocol::{AudioData, Message, RoomListing, RoomOptions, Track};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -350,22 +350,27 @@ async fn handle_message(
 
             match data {
                 // intercept Finish in case we want to actually just start the next song instead
-                protocol::AudioData::Finish => {
+                AudioData::Finish => {
                     let next_track = room.queue.pop_front();
                     if let Some(track) = next_track {
+                        // we have a new track to play, don't send the finish method anywhere
+                        // this is REALLY silly maybe?
                         room.playing = Some(track);
 
+                        // send playing and queue state
                         let p = room.playing_info();
                         room.broadcast(&p).await;
                         let q = room.queue_info();
                         room.broadcast(&q).await;
                     } else {
-                        // pass to rest
+                        // the track finished and we have nothing else to play
+                        // send playing state
                         room.playing = None;
                         let p = room.playing_info();
                         room.broadcast(&p).await;
 
-                        room.broadcast(m).await;
+                        // broadcast a finish method to everyone
+                        room.broadcast(&Message::AudioData(AudioData::Finish)).await;
                     }
                 }
                 _ => {
