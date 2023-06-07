@@ -475,7 +475,7 @@ impl MainThread {
                             let Some(conn) = self.connection.as_mut() else {
                                 self.loading_count -= num_tracks;
                                 self.update_ui_status();
-                                return
+                                continue
                             };
 
                             let tasks: Vec<tokio::task::JoinHandle<Option<Track>>> = paths
