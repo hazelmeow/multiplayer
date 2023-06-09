@@ -10,7 +10,7 @@ use fltk::widget_extends;
 
 pub struct BitrateBar {
     inner: widget::Widget,
-    bitrate: Rc<RefCell<usize>>,
+    bitrate: Rc<RefCell<u32>>,
     buffer_level: Rc<RefCell<u8>>, // 0 to 6
 }
 
@@ -76,7 +76,7 @@ impl BitrateBar {
             _ => (0, 0),
         }
     }
-    pub fn update_bitrate(&mut self, bitrate: usize) {
+    pub fn update_bitrate(&mut self, bitrate: u32) {
         self.bitrate.replace(bitrate);
         self.redraw();
     }

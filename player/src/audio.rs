@@ -7,6 +7,7 @@ use opus::Decoder;
 use ringbuf::{LocalRb, Rb};
 
 use protocol::AudioData;
+use tokio::sync::mpsc;
 
 use crate::gui::visualizer::calculate_visualizer;
 use crate::AudioStatus;
@@ -208,20 +209,18 @@ pub enum AudioCommand {
     Shutdown,
 }
 
-pub type AudioTx = std::sync::mpsc::Sender<AudioCommand>;
-pub type AudioRx = std::sync::mpsc::Receiver<AudioCommand>;
-pub type AudioStatusTx = tokio::sync::mpsc::UnboundedSender<AudioStatus>;
-pub type AudioStatusRx = tokio::sync::mpsc::UnboundedReceiver<AudioStatus>;
+pub type AudioTx = mpsc::UnboundedSender<AudioCommand>;
+pub type AudioRx = mpsc::UnboundedReceiver<AudioCommand>;
+pub type AudioStatusTx = mpsc::UnboundedSender<AudioStatus>;
+pub type AudioStatusRx = mpsc::UnboundedReceiver<AudioStatus>;
 
+#[derive(Clone)]
 pub struct AudioThreadHandle {
     tx: AudioTx,
 }
 
 impl AudioThreadHandle {
-    pub fn send(
-        &mut self,
-        cmd: AudioCommand,
-    ) -> Result<(), std::sync::mpsc::SendError<AudioCommand>> {
+    pub fn send(&mut self, cmd: AudioCommand) -> Result<(), mpsc::error::SendError<AudioCommand>> {
         self.tx.send(cmd)
     }
 }
@@ -262,7 +261,7 @@ impl AudioThread {
     }
 
     fn run(&mut self) {
-        while let Ok(data) = self.rx.recv() {
+        while let Some(data) = self.rx.blocking_recv() {
             match data {
                 AudioCommand::AudioData(d) => match d {
                     AudioData::Frame(frame) => {

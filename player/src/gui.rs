@@ -1,6 +1,4 @@
-use std::collections::HashMap;
-use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::sync::Arc;
 
 use fltk::app;
 use fltk::app::App;
@@ -15,9 +13,9 @@ use fltk::image;
 use fltk::image::JpegImage;
 use fltk::prelude::*;
 use fltk::window::*;
+use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 
-use protocol::GetInfo;
-use protocol::Track;
 use protocol::TrackArt;
 
 pub mod bitrate_bar;
@@ -27,7 +25,7 @@ pub mod marquee_label;
 pub mod queue_window;
 pub mod visualizer;
 
-use crate::Connection;
+use crate::State;
 
 use self::connection_window::ConnectionWindow;
 use self::main_window::*;
@@ -44,15 +42,13 @@ pub enum UIEvent {
     BtnQueue,
     BtnOpenConnectionDialog,
     Connect(String),
-    JoinRoom(usize),
+    JoinRoom(u32),
     VolumeSlider(f32),
     VolumeUp,
     VolumeDown,
     DroppedFiles(String),
     Stop,
     Pause,
-    Test(String),
-    GetInfo(GetInfo),
     HideQueue,
     HideConnectionWindow,
     Quit,
@@ -64,15 +60,15 @@ pub enum UIEvent {
 #[derive(Debug, Clone)]
 pub enum UIUpdateEvent {
     SetTime(usize, usize),
-    UpdateUserList(HashMap<String, String>),
-    UpdateRoomName(Option<String>),
-    UpdateQueue(Option<Track>, VecDeque<Track>),
+    UserListChanged,
+    RoomChanged,
+    QueueChanged,
     UpdateConnectionTree(Vec<self::connection_window::Server>),
     UpdateConnectionTreePartial(self::connection_window::Server),
-    Status(String),
+    Status,
     Visualizer([u8; 14]),
     Buffer(u8),
-    Bitrate(usize),
+    Bitrate(u32),
     Volume(f32),
     Periodic,
 }
@@ -93,9 +89,9 @@ struct DragState {
     released: bool,
 }
 
+#[derive(Clone)]
 pub struct UIThreadHandle {
     sender: Sender<UIEvent>,
-    pub ui_rx: UiRx,
 }
 
 impl UIThreadHandle {
@@ -112,8 +108,7 @@ pub struct UIThread {
     receiver: Receiver<UIEvent>,
     tx: UiTx,
 
-    my_id: String,
-    room_name: Option<String>,
+    state: Arc<RwLock<State>>,
 
     gui: MainWindow,
     queue_gui: QueueWindow,
@@ -122,23 +117,30 @@ pub struct UIThread {
 
 impl UIThread {
     // TODO: put the id somewhere nicer
-    pub fn spawn(my_id: String) -> UIThreadHandle {
+    pub fn spawn(state: Arc<RwLock<State>>) -> (UIThreadHandle, mpsc::UnboundedReceiver<UIEvent>) {
         // from anywhere to ui (including ui to ui..?)
         let (sender, receiver) = fltk::app::channel::<UIEvent>();
 
         // from main thread logic to ui
-        let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<UIEvent>();
+        let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UIEvent>();
 
         let thread_sender = sender.to_owned();
         std::thread::spawn(move || {
-            let mut t = UIThread::new(thread_sender, receiver, ui_tx, my_id);
+            let mut t = UIThread::new(thread_sender, receiver, ui_tx, state);
             t.run();
         });
 
-        UIThreadHandle { sender, ui_rx }
+        // ui_rx can't be part of the handle because the handle needs to be clone
+        // only one thing can own and consume from the receiver
+        (UIThreadHandle { sender }, ui_rx)
     }
 
-    fn new(sender: Sender<UIEvent>, receiver: Receiver<UIEvent>, tx: UiTx, my_id: String) -> Self {
+    fn new(
+        sender: Sender<UIEvent>,
+        receiver: Receiver<UIEvent>,
+        tx: UiTx,
+        state: Arc<RwLock<State>>,
+    ) -> Self {
         let app = fltk::app::App::default();
         let widgets = fltk_theme::WidgetTheme::new(fltk_theme::ThemeType::Classic);
         widgets.apply();
@@ -174,8 +176,7 @@ impl UIThread {
             receiver,
             tx,
 
-            my_id,
-            room_name: None,
+            state,
 
             gui,
             queue_gui,
@@ -210,142 +211,15 @@ impl UIThread {
 
                 // only deal with ui-relevant stuff here
                 match msg {
-                    UIEvent::Update(evt) => match evt {
-                        UIUpdateEvent::SetTime(elapsed, total) => {
-                            // TODO: switch between elapsed and remaining on there
-                            self.gui.lbl_time.set_label(&min_secs(elapsed));
-                            let progress = elapsed as f64 / total as f64;
-                            self.gui.seek_bar.set_value(progress);
-                        }
-                        UIUpdateEvent::Visualizer(bars) => {
-                            self.gui.visualizer.update_values(bars);
-                        }
-                        UIUpdateEvent::Buffer(val) => {
-                            self.gui.bitrate_bar.update_buffer_level(val);
-                        }
-                        UIUpdateEvent::Bitrate(val) => {
-                            self.gui.bitrate_bar.update_bitrate(val);
-                        }
-                        UIUpdateEvent::Status(val) => {
-                            self.gui.status_field.set_label(&val);
-                        }
-                        UIUpdateEvent::Volume(val) => {
-                            self.gui.volume_slider.set_value(val.into());
-                        }
-                        UIUpdateEvent::Periodic => {
-                            if self.gui.lbl_title.waited_long_enough() {
-                                self.gui.lbl_title.nudge(-4);
-                            }
-                        }
-                        UIUpdateEvent::UpdateUserList(val) => {
-                            self.gui.users.clear();
-                            self.gui.users.add(&format!(
-                                "[{}]",
-                                self.room_name.clone().unwrap_or("no room".into())
-                            ));
-                            for (id, name) in val.iter() {
-                                let line = if id == &self.my_id {
-                                    format!("@b* you")
-                                } else {
-                                    format!("* {} ({})", name, id)
-                                };
-                                self.gui.users.add(&line);
-                            }
-                            self.gui.status_right_display.set_label(&format!(
-                                "U{:0>2} Q{:0>2}",
-                                self.gui.users.size(),
-                                self.queue_gui.queue_browser.size(),
-                            ));
-                        }
-                        UIUpdateEvent::UpdateRoomName(val) => {
-                            self.room_name = val;
-                        }
-                        UIUpdateEvent::UpdateQueue(current, queue) => {
-                            self.queue_gui.queue_browser.clear();
-                            // TODO: metadata stuff here is TOO LONG AND ANNOYING
-                            if let Some(track) = current {
-                                let line = format!(
-                                    "@b{}\t[{}] {}",
-                                    track.owner,
-                                    min_secs(track.metadata.duration),
-                                    track
-                                        .metadata
-                                        .title
-                                        .as_ref()
-                                        .unwrap_or(&"[no title]".to_string())
-                                );
-                                self.queue_gui.queue_browser.add(&line);
-
-                                // also update display
-                                self.gui.lbl_title.set_text(
-                                    track
-                                        .metadata
-                                        .title
-                                        .as_ref()
-                                        .unwrap_or(&"[no title]".to_string()),
-                                );
-                                self.gui.lbl_title.zero();
-
-                                self.gui.lbl_artist.set_label(
-                                    track
-                                        .metadata
-                                        .album_artist
-                                        .as_ref()
-                                        .unwrap_or(&"[unknown artist]".to_string()),
-                                );
-
-                                if let Some(art) = track.metadata.art {
-                                    if let Err(err) = match art {
-                                        TrackArt::Jpeg(data) => JpegImage::from_data(&data)
-                                            .and_then(|img| {
-                                                self.gui.art_frame.set_image(Some(img));
-                                                self.gui.art_frame.redraw();
-                                                Ok(())
-                                            }),
-                                    } {
-                                        eprintln!("failed to load image: {:?}", err);
-                                    }
-                                } else {
-                                    self.gui.art_frame.set_image(None::<JpegImage>); // hm that's silly
-                                    self.gui.art_frame.redraw();
-                                }
-                            }
-                            for track in queue {
-                                let line = format!(
-                                    "{}\t[{}] {}",
-                                    track.owner,
-                                    min_secs(track.metadata.duration),
-                                    track.metadata.title.unwrap_or("[no title]".to_string())
-                                );
-                                self.queue_gui.queue_browser.add(&line);
-                            }
-                            self.gui.status_right_display.set_label(&format!(
-                                "U{:0>2} Q{:0>2}",
-                                self.gui.users.size(),
-                                self.queue_gui.queue_browser.size(),
-                            ));
-                        }
-                        UIUpdateEvent::UpdateConnectionTree(list) => {
-                            self.connection_gui.populate(list);
-                        }
-                        UIUpdateEvent::UpdateConnectionTreePartial(server) => {
-                            self.connection_gui.update_just_one_server(server);
-                        }
-                        _ => {
-                            dbg!(evt);
-                        }
-                    },
+                    UIEvent::Update(evt) => self.handle_update(evt),
                     UIEvent::ConnectionDlg(evt) => match evt {
                         ConnectionDlgEvent::BtnConnect => {
                             if let Some(item) = self.connection_gui.tree.first_selected_item() {
-                                let (maybe_room_id, server_addr): (Option<usize>, String) =
+                                let (maybe_room_id, server_addr): (Option<u32>, String) =
                                     match item.depth() {
                                         1 => unsafe {
                                             // server selected
-                                            (
-                                                None,
-                                                item.user_data().unwrap(),
-                                            )
+                                            (None, item.user_data().unwrap())
                                         },
                                         2 => unsafe {
                                             // room selected
@@ -381,7 +255,9 @@ impl UIThread {
 
                     UIEvent::BtnOpenConnectionDialog => {
                         self.connection_gui.main_win.show();
-                        self.tx.send(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh)).unwrap();
+                        self.tx
+                            .send(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh))
+                            .unwrap();
                     }
                     UIEvent::BtnQueue => {
                         self.queue_gui.main_win.show();
@@ -394,12 +270,211 @@ impl UIThread {
                         self.connection_gui.main_win.hide();
                     }
                     UIEvent::Quit => break,
-                    UIEvent::Test(s) => {
-                        //dbg!(gui.temp_input.value());
-                    }
                     _ => {}
                 }
             }
+        }
+    }
+
+    fn handle_update(&mut self, evt: UIUpdateEvent) {
+        match evt {
+            UIUpdateEvent::SetTime(elapsed, total) => {
+                // TODO: switch between elapsed and remaining on there
+                self.gui.lbl_time.set_label(&min_secs(elapsed));
+                let progress = elapsed as f64 / total as f64;
+                self.gui.seek_bar.set_value(progress);
+            }
+            UIUpdateEvent::Visualizer(bars) => {
+                self.gui.visualizer.update_values(bars);
+            }
+            UIUpdateEvent::Buffer(val) => {
+                self.gui.bitrate_bar.update_buffer_level(val);
+            }
+            UIUpdateEvent::Bitrate(val) => {
+                self.gui.bitrate_bar.update_bitrate(val);
+            }
+            UIUpdateEvent::Status => {
+                self.update_status();
+            }
+            UIUpdateEvent::Volume(val) => {
+                self.gui.volume_slider.set_value(val.into());
+            }
+            UIUpdateEvent::Periodic => {
+                if self.gui.lbl_title.waited_long_enough() {
+                    self.gui.lbl_title.nudge(-4);
+                }
+            }
+            UIUpdateEvent::UserListChanged => {
+                self.update_right_status();
+
+                let s = self.state.blocking_read();
+
+                self.gui.users.clear();
+
+                if let Some(c) = &s.connection {
+                    if let Some(r) = &c.room {
+                        self.gui.users.add(&format!("[{}]", r.name));
+
+                        for (id, name) in r.connected_users.iter() {
+                            let line = if id == &s.my_id {
+                                format!("@b* you")
+                            } else {
+                                format!("* {} ({})", name, id)
+                            };
+                            self.gui.users.add(&line);
+                        }
+                    } else {
+                        self.gui.users.add("no room".into());
+                    }
+                } else {
+                    // not connected
+                }
+            }
+            UIUpdateEvent::RoomChanged => {}
+            UIUpdateEvent::QueueChanged => {
+                self.update_right_status();
+
+                let s = self.state.blocking_read();
+
+                self.queue_gui.queue_browser.clear();
+
+                if let Some(c) = &s.connection {
+                    if let Some(r) = &c.room {
+                        // TODO: metadata stuff here is TOO LONG AND ANNOYING
+                        if let Some(track) = &r.playing {
+                            let line = format!(
+                                "@b{}\t[{}] {}",
+                                track.owner,
+                                min_secs(track.metadata.duration as usize),
+                                track
+                                    .metadata
+                                    .title
+                                    .as_ref()
+                                    .unwrap_or(&"[no title]".to_string())
+                            );
+                            self.queue_gui.queue_browser.add(&line);
+
+                            // also update display
+                            self.gui.lbl_title.set_text(
+                                track
+                                    .metadata
+                                    .title
+                                    .as_ref()
+                                    .unwrap_or(&"[no title]".to_string()),
+                            );
+                            self.gui.lbl_title.zero();
+
+                            self.gui.lbl_artist.set_label(
+                                track
+                                    .metadata
+                                    .album_artist
+                                    .as_ref()
+                                    .unwrap_or(&"[unknown artist]".to_string()),
+                            );
+
+                            if let Some(art) = &track.metadata.art {
+                                if let Err(err) = match art {
+                                    TrackArt::Jpeg(data) => {
+                                        JpegImage::from_data(&data).and_then(|img| {
+                                            self.gui.art_frame.set_image(Some(img));
+                                            self.gui.art_frame.redraw();
+                                            Ok(())
+                                        })
+                                    }
+                                } {
+                                    eprintln!("failed to load image: {:?}", err);
+                                }
+                            } else {
+                                self.gui.art_frame.set_image(None::<JpegImage>); // hm that's silly
+                                self.gui.art_frame.redraw();
+                            }
+                        }
+                        for track in &r.queue {
+                            let line = format!(
+                                "{}\t[{}] {}",
+                                track.owner,
+                                min_secs(track.metadata.duration as usize),
+                                track
+                                    .metadata
+                                    .title
+                                    .clone()
+                                    .unwrap_or("[no title]".to_string())
+                            );
+                            self.queue_gui.queue_browser.add(&line);
+                        }
+                    }
+                }
+
+                self.gui.status_right_display.set_label(&format!(
+                    "U{:0>2} Q{:0>2}",
+                    self.gui.users.size(),
+                    self.queue_gui.queue_browser.size(),
+                ));
+            }
+            UIUpdateEvent::UpdateConnectionTree(list) => {
+                self.connection_gui.populate(list);
+            }
+            UIUpdateEvent::UpdateConnectionTreePartial(server) => {
+                self.connection_gui.update_just_one_server(server);
+            }
+            _ => {
+                dbg!(evt);
+            }
+        }
+    }
+
+    fn update_right_status(&mut self) {
+        let s = self.state.blocking_read();
+
+        if let Some(c) = &s.connection {
+            if let Some(r) = &c.room {
+                self.gui.status_right_display.set_label(&format!(
+                    "U{:0>2} Q{:0>2}",
+                    r.connected_users.len(),
+                    r.queue.len() + 1,
+                ));
+            } else {
+                self.gui.status_right_display.set_label("U00 Q00");
+            }
+        } else {
+            self.gui.status_right_display.set_label("U00 Q00");
+        }
+    }
+
+    // set status based on state and priorities
+    fn update_status(&mut self) {
+        let status = self.get_status();
+        self.gui.status_field.set_label(&status);
+    }
+    fn get_status(&self) -> String {
+        let state = self.state.blocking_read();
+
+        if let Some(connection) = &state.connection {
+            if state.loading_count == 1 {
+                return format!("Loading 1 file...");
+            } else if state.loading_count > 1 {
+                return format!("Loading {} files...", state.loading_count);
+            }
+
+            if connection.buffering {
+                return format!("Buffering...");
+            }
+
+            if let Some(r) = &connection.room {
+                if let Some(t) = &r.playing {
+                    if t.owner == state.my_id {
+                        return "Playing (transmitting)".to_string();
+                    } else {
+                        return format!("Playing (receiving from {:?})", t.owner);
+                    }
+                } else {
+                    return format!("Connected to {}/{}", connection.addr, r.name);
+                }
+            }
+
+            return format!("Connected to {}", connection.addr);
+        } else {
+            format!("<not connected>")
         }
     }
 

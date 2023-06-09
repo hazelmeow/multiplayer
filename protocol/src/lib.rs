@@ -17,6 +17,7 @@ pub enum AudioData {
     Finish,
     Resume,
 }
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
     pub owner: String,
@@ -31,7 +32,7 @@ pub enum TrackArt {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct TrackMetadata {
-    pub duration: usize,
+    pub duration: u32,
     pub track_no: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
@@ -41,28 +42,10 @@ pub struct TrackMetadata {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum Info {
-    Playing(Option<Track>),
-    Queue(VecDeque<Track>),
-    ConnectedUsers(HashMap<String, String>),
-    Room(Option<RoomListing>),
-    RoomList(Vec<RoomListing>),
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum GetInfo {
-    Playing,
-    Queue,
-    ConnectedUsers,
-    Room,
-    RoomList,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RoomListing {
-    pub id: usize,
+    pub id: u32,
     pub name: String,
-    pub user_names: Vec<String>
+    pub user_names: Vec<String>,
     // pub options: RoomOptions, //?
 }
 
@@ -75,19 +58,41 @@ pub struct RoomOptions {
 pub enum Message {
     QueryRoomList,
 
+    RefreshRoomList,
+    AudioData(AudioData),
+    Text(String),
+
+    Notification(Notification),
+
+    Request { request_id: u32, data: Request },
+    Response { request_id: u32, data: Response },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Notification {
+    Playing(Option<Track>),
+    Queue(VecDeque<Track>),
+    ConnectedUsers(HashMap<String, String>),
+    Room(Option<RoomListing>),
+    RoomList(Vec<RoomListing>),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Request {
     Handshake(String),
     Authenticate { id: String, name: String },
 
-    JoinRoom(usize),
+    JoinRoom(u32),
     LeaveRoom,
     CreateRoom(RoomOptions),
 
-    AudioData(AudioData),
-
-    Text(String),
-
     QueuePush(Track),
+}
 
-    GetInfo(GetInfo),
-    Info(Info),
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub enum Response {
+    Success(bool),
+
+    Handshake(String),
+    CreateRoomResponse(u32),
 }

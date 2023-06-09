@@ -9,7 +9,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
 use protocol::network::FrameStream;
-use protocol::{AudioData, Message, RoomListing, RoomOptions, Track};
+use protocol::{
+    AudioData, Message, Notification, Request, Response, RoomListing, RoomOptions, Track,
+};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -63,11 +65,15 @@ impl Room {
     }
 
     async fn broadcast(&mut self, message: &Message) {
-        for (id, peer) in self.peers.iter_mut() {
+        for (_, peer) in self.peers.iter_mut() {
             if let Err(e) = peer.tx.send(message.clone()) {
                 println!("error broadcasting message: {:?}", e);
             }
         }
+    }
+
+    async fn notify(&mut self, notification: Notification) {
+        self.broadcast(&Message::Notification(notification)).await
     }
 
     async fn broadcast_others(&mut self, sender: &Peer, message: &Message) {
@@ -80,18 +86,19 @@ impl Room {
         }
     }
 
-    fn playing_info(&self) -> Message {
-        Message::Info(protocol::Info::Playing(self.playing.clone()))
+    fn playing_notification(&self) -> Notification {
+        Notification::Playing(self.playing.clone())
     }
 
-    fn queue_info(&self) -> Message {
-        Message::Info(protocol::Info::Queue(self.queue.clone()))
+    fn queue_notification(&self) -> Notification {
+        Notification::Queue(self.queue.clone())
     }
 
-    fn connected_users_info(&self, mut names: HashMap<Id, String>) -> Message {
+    fn connected_users_notification(&self, mut names: HashMap<Id, String>) -> Notification {
         names.retain(|id, _| self.peers.contains_key(id));
-        Message::Info(protocol::Info::ConnectedUsers(names))
+        Notification::ConnectedUsers(names)
     }
+
     fn room_users(&self, mut names: HashMap<Id, String>) -> Vec<String> {
         names.retain(|id, _| self.peers.contains_key(id));
         names.keys().into_iter().map(|x| x.to_owned()).collect()
@@ -99,8 +106,8 @@ impl Room {
 }
 
 struct Shared {
-    next_room: usize,
-    rooms: HashMap<usize, Room>,
+    next_room: u32,
+    rooms: HashMap<u32, Room>,
 
     waiting_peers: HashMap<Id, PeerHandle>,
 
@@ -119,7 +126,7 @@ impl Shared {
         }
     }
 
-    fn room_list_info(&self) -> Message {
+    fn room_list_notification(&self) -> Notification {
         let list: Vec<RoomListing> = self
             .rooms
             .iter()
@@ -134,7 +141,7 @@ impl Shared {
             })
             .collect();
 
-        Message::Info(protocol::Info::RoomList(list))
+        Notification::RoomList(list)
     }
 }
 
@@ -144,7 +151,7 @@ struct PeerHandle {
 
 struct Peer {
     id: String,
-    room_id: Option<usize>,
+    room_id: Option<u32>,
     addr: SocketAddr,
     stream: FrameStream,
     rx: Rx, // mpsc channel used to receive messages from peers
@@ -176,6 +183,13 @@ impl Peer {
             rx,
         })
     }
+
+    async fn notify(
+        &mut self,
+        notification: Notification,
+    ) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.stream.send(&Message::Notification(notification)).await
+    }
 }
 
 async fn handle_connection(
@@ -185,64 +199,94 @@ async fn handle_connection(
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let mut stream = FrameStream::new(tcp_stream);
 
-    // handshake
-    if let Some(handshake_msg) = stream.next_frame().await? {
-        match handshake_msg {
-            Message::Handshake(hs) => {
-                println!("* {} - handshake: {:x?} ('{}')", addr, hs.as_bytes(), hs);
-                // pretend it's a version number or something useful
-                if hs == "meow" {
-                    // now reply
-                    stream.send(&Message::Handshake("nyaa".to_string())).await?;
-                } else {
-                    println!("* {} - invalid handshake", addr);
-                    return Ok(());
+    // first message received must be a valid handshake
+    if let Ok(Some(first_msg)) = stream.next_frame().await {
+        match first_msg {
+            Message::Request {
+                request_id,
+                data: request,
+            } => match request {
+                Request::Handshake(hs) => {
+                    println!("* {} - handshake", addr);
+                    // pretend it's a version number or something useful
+                    if hs == "meow" {
+                        // now reply
+                        stream
+                            .send(&Message::Response {
+                                request_id,
+                                data: Response::Handshake("nyaa".to_string()),
+                            })
+                            .await?;
+
+                        return handle_handshaken_connection(state, stream).await;
+                    } else {
+                        println!("* {} - invalid handshake", addr);
+                    }
                 }
-            }
-            Message::QueryRoomList => {
-                let state = state.lock().await;
-                stream.send(&state.room_list_info()).await?;
-
-                return Ok(());
-            }
-
-            _ => {
-                // wrong message type
-                return Ok(());
-            }
+                _ => {}
+            },
+            _ => {}
         }
-    } else {
-        // socket was disconnected
-        return Ok(());
     }
 
-    // authenticate and continue to other handler
-    if let Some(auth_msg) = stream.next_frame().await? {
-        match auth_msg {
-            Message::Authenticate { id, name } => {
-                println!("* {} - authenticate: {}", addr, id);
-
-                // todo: check id format? check if in use? send success message?
-
-                handle_authenticated_connection(state, stream, id, name).await
-            }
-            _ => {
-                // wrong message type
-                Ok(())
-            }
-        }
-    } else {
-        // socket was disconnected
-        Ok(())
-    }
+    // invalid first message or the socket disconnected or errored
+    Err("handshake failed".into())
 }
 
-async fn leave_room(state: Arc<Mutex<Shared>>, peer: &mut Peer) {
+async fn handle_handshaken_connection(
+    state: Arc<Mutex<Shared>>,
+    mut stream: FrameStream,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    // loop for un-upgraded connections
+    while let Some(msg) = stream.next_frame().await? {
+        match msg {
+            Message::QueryRoomList => {
+                let state = state.lock().await;
+                stream
+                    .send(&Message::Notification(state.room_list_notification()))
+                    .await?;
+            }
+
+            Message::Request {
+                request_id,
+                data: request,
+            } => match request {
+                Request::Authenticate { id, name } => {
+                    println!("* {} - authenticate: {}", stream.get_addr().unwrap(), id);
+
+                    stream
+                        .send(&Message::Response {
+                            request_id,
+                            data: Response::Success(true),
+                        })
+                        .await?;
+
+                    // todo: check id format? check if in use? send success message?
+
+                    return handle_authenticated_connection(state, stream, id, name).await;
+                }
+
+                _ => return Err("not allowed".into()),
+            },
+
+            _ => return Err("not allowed".into()),
+        }
+    }
+
+    // stream disconnected
+    Ok(())
+}
+
+// Ok(success true/false), Err(we should disconnect them?)
+async fn leave_room(
+    state: Arc<Mutex<Shared>>,
+    peer: &mut Peer,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let mut state = state.lock().await;
     let names = state.names.clone();
 
-    let Some(room_id) = peer.room_id else { return };
-    let Some(room) = state.rooms.get_mut(&room_id) else { return };
+    let Some(room_id) = peer.room_id else { return Ok(false) };
+    let Some(room) = state.rooms.get_mut(&room_id) else { return Ok(false) };
 
     let handle = room.peers.remove(&peer.id).unwrap();
     peer.room_id = None;
@@ -252,42 +296,49 @@ async fn leave_room(state: Arc<Mutex<Shared>>, peer: &mut Peer) {
     //     state.rooms.remove(&room_id);
     // }
 
-    let connected_users = room.connected_users_info(names);
-    room.broadcast(&connected_users).await;
-
-    peer.stream.send(&Message::Info(protocol::Info::Room(None))).await.unwrap();
+    room.notify(room.connected_users_notification(names)).await;
+    peer.notify(Notification::Room(None)).await?;
 
     state.waiting_peers.insert(peer.id.clone(), handle);
+
+    Ok(true)
 }
 
-async fn join_room(state_mutex: Arc<Mutex<Shared>>, peer: &mut Peer, room_id: usize) {
+async fn join_room(
+    state_mutex: Arc<Mutex<Shared>>,
+    peer: &mut Peer,
+    room_id: u32,
+) -> Result<bool, Box<dyn Error + Send + Sync>> {
     let mut state = state_mutex.lock().await;
     let names = state.names.clone();
     let names2 = state.names.clone(); // blehhh
 
-    let Some(handle) = state.waiting_peers.remove(&peer.id) else { return };
+    let Some(handle) = state.waiting_peers.remove(&peer.id) else { return Ok(false) };
 
-    let Some(room) = state.rooms.get_mut(&room_id) else { return };
+    let Some(room) = state.rooms.get_mut(&room_id) else { return Ok(false) };
     room.peers.insert(peer.id.clone(), handle);
 
     peer.room_id = Some(room_id);
 
     // notify everyone of the new ConnectedUsers list
-    let connected_users = room.connected_users_info(names);
-    room.broadcast(&connected_users).await;
+    room.notify(room.connected_users_notification(names)).await;
 
     // notify new peer of current playing track and queue
-    let room_info = protocol::Info::Room(Some(RoomListing { id: room_id, name: room.name.clone(), user_names: room.room_users(names2) }));
-    peer.stream.send(&Message::Info(room_info)).await.unwrap();
-    let playing = room.playing_info();
-    peer.stream.send(&playing).await.unwrap();
-    let queue = room.queue_info();
-    peer.stream.send(&queue).await.unwrap();
+    peer.notify(Notification::Room(Some(RoomListing {
+        id: room_id,
+        name: room.name.clone(),
+        user_names: room.room_users(names2),
+    })))
+    .await?;
+    peer.notify(room.playing_notification()).await?;
+    peer.notify(room.queue_notification()).await?;
 
     drop(state);
+
     let state = state_mutex.lock().await;
-    let room_list_info = state.room_list_info();
-    peer.stream.send(&room_list_info).await.unwrap();
+    peer.notify(state.room_list_notification()).await?;
+
+    Ok(true)
 }
 
 async fn handle_authenticated_connection(
@@ -338,27 +389,27 @@ async fn handle_message(
     peer: &mut Peer,
     m: &Message,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    match m {
-        Message::CreateRoom(options) => {
-            let mut state = state.lock().await;
+    match &m {
+        Message::Request {
+            request_id,
+            data: request,
+        } => {
+            let result = handle_request(state, peer, request).await;
 
-            let room_id = state.next_room;
-            state.next_room += 1;
+            match result {
+                Ok(Some(response)) => {
+                    peer.stream
+                        .send(&Message::Response {
+                            request_id: *request_id,
+                            data: response,
+                        })
+                        .await?;
 
-            let room = Room::new(options.clone());
-            state.rooms.insert(room_id, room);
-
-            Ok(())
-        }
-
-        Message::JoinRoom(room_id) => {
-            join_room(state, peer, *room_id).await;
-            Ok(())
-        }
-
-        Message::LeaveRoom => {
-            leave_room(state, peer).await;
-            Ok(())
+                    Ok(())
+                }
+                Ok(None) => Ok(()),
+                Err(e) => return Err(e),
+            }
         }
 
         Message::AudioData(data) => {
@@ -382,16 +433,16 @@ async fn handle_message(
                         room.playing = Some(track);
 
                         // send playing and queue state
-                        let p = room.playing_info();
-                        room.broadcast(&p).await;
-                        let q = room.queue_info();
-                        room.broadcast(&q).await;
+                        let p = room.playing_notification();
+                        room.broadcast(&Message::Notification(p)).await;
+                        let q = room.queue_notification();
+                        room.broadcast(&Message::Notification(q)).await;
                     } else {
                         // the track finished and we have nothing else to play
                         // send playing state
                         room.playing = None;
-                        let p = room.playing_info();
-                        room.broadcast(&p).await;
+                        let p = room.playing_notification();
+                        room.broadcast(&Message::Notification(p)).await;
 
                         // broadcast a finish method to everyone
                         room.broadcast(&Message::AudioData(AudioData::Finish)).await;
@@ -399,70 +450,16 @@ async fn handle_message(
                 }
                 _ => {
                     // resend other messages to all other peers
-                    room.broadcast_others(&peer, m).await;
+                    room.broadcast_others(&peer, &m).await;
                 }
             }
 
             Ok(())
         }
 
-        Message::GetInfo(info) => {
-            let mut state = state.lock().await;
-
-            match info {
-                protocol::GetInfo::Playing => {
-                    let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
-
-                    let m = room.playing_info();
-                    peer.stream.send(&m).await?;
-
-                    Ok(())
-                }
-                protocol::GetInfo::Queue => {
-                    let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
-
-                    let m = room.queue_info();
-                    peer.stream.send(&m).await?;
-
-                    Ok(())
-                }
-                protocol::GetInfo::ConnectedUsers => {
-                    let names = state.names.clone();
-                    let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
-
-                    let m = room.connected_users_info(names);
-                    peer.stream.send(&m).await?;
-
-                    Ok(())
-                }
-                protocol::GetInfo::Room => {
-                    
-                    Ok(())
-                }
-                protocol::GetInfo::RoomList => {
-                    peer.stream.send(&state.room_list_info()).await?;
-                    Ok(())
-                }
-            }
-        }
-
-        Message::QueuePush(track) => {
-            let mut state = state.lock().await;
-            let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
-
-            // just play it now
-            if room.playing.is_none() {
-                room.playing = Some(track.to_owned());
-
-                let playing_msg = room.playing_info();
-                room.broadcast(&playing_msg).await;
-            } else {
-                room.queue.push_back(track.to_owned());
-            }
-
-            let queue_msg = room.queue_info();
-            room.broadcast(&queue_msg).await;
-
+        Message::RefreshRoomList => {
+            let state = state.lock().await;
+            peer.notify(state.room_list_notification()).await?;
             Ok(())
         }
 
@@ -473,22 +470,96 @@ async fn handle_message(
             let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
 
             // resend this message to all other peers
-            room.broadcast_others(&peer, m).await;
+            room.broadcast_others(&peer, &m).await;
 
             Ok(())
         }
 
         // should not be reached
         Message::QueryRoomList => Ok(()),
-        Message::Handshake(_) => Ok(()),
-        Message::Authenticate { id, name } => Ok(()),
-        Message::Info(_) => Ok(()),
+        Message::Notification(_) => Ok(()),
+        Message::Response { .. } => Ok(()),
+    }
+}
+
+// Err -> something bad happened and we should disconnect them
+// Ok(Some) -> send a response
+// Ok(None) -> no response to send (something happened that wasn't supposed to happen but it's fine)
+async fn handle_request(
+    state: Arc<Mutex<Shared>>,
+    peer: &mut Peer,
+    r: &Request,
+) -> Result<Option<Response>, Box<dyn Error + Send + Sync>> {
+    match r {
+        Request::CreateRoom(options) => {
+            let mut state = state.lock().await;
+
+            let room_id = state.next_room;
+            state.next_room += 1;
+
+            let room = Room::new(options.clone());
+            state.rooms.insert(room_id, room);
+
+            Ok(Some(Response::CreateRoomResponse(room_id)))
+        }
+
+        Request::JoinRoom(room_id) => {
+            // leave room if we are already in one
+            if peer.room_id.is_some() {
+                match leave_room(state.clone(), peer).await {
+                    Ok(success) => {
+                        // if we couldn't leave our room, we can't join a new room
+                        if !success {
+                            return Ok(Some(Response::Success(false)));
+                        }
+                    }
+
+                    // unrecoverable
+                    Err(e) => return Err(e),
+                }
+            }
+
+            match join_room(state, peer, *room_id).await {
+                Ok(success) => Ok(Some(Response::Success(success))),
+
+                // unrecoverable
+                Err(e) => return Err(e),
+            }
+        }
+
+        Request::LeaveRoom => match leave_room(state, peer).await {
+            Ok(success) => Ok(Some(Response::Success(success))),
+            Err(e) => Err(e),
+        },
+
+        Request::QueuePush(track) => {
+            let mut state = state.lock().await;
+            let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(Some(Response::Success(false))) };
+
+            // just play it now
+            if room.playing.is_none() {
+                room.playing = Some(track.to_owned());
+
+                room.notify(room.playing_notification()).await;
+            } else {
+                room.queue.push_back(track.to_owned());
+            }
+
+            room.notify(room.queue_notification()).await;
+
+            Ok(Some(Response::Success(true)))
+        }
+
+        // shouldn't happen
+        Request::Handshake(_) => Ok(None),
+        Request::Authenticate { .. } => Ok(None),
     }
 }
 
 async fn handle_disconnect(state: Arc<Mutex<Shared>>, peer: &mut Peer) {
     // remove them from the room cleanly and notify others
-    leave_room(state.clone(), peer).await;
+    // (we don't care what happened at this point, we tried our best^^)
+    let _ = leave_room(state.clone(), peer).await;
 
     // remove name from the map
     let mut state = state.lock().await;

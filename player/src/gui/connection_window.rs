@@ -133,13 +133,11 @@ impl ConnectionWindow {
             } else {
                 eprintln!("uhhhhhh should never happen,,,,,,,,,,,");
             }
-
         } else {
             println!("couldn't find {} ????", server.name);
         }
         tree.redraw();
     }
-
 }
 
 #[derive(Debug, Clone)]
