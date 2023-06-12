@@ -7,6 +7,7 @@ use fltk::input::Input;
 use fltk::prelude::*;
 use fltk::tree::Tree;
 use fltk::tree::TreeItem;
+use fltk::tree::TreeReason;
 use fltk::window::*;
 
 use super::add_bar;
@@ -68,13 +69,32 @@ impl ConnectionWindow {
         tree.set_trigger(CallbackTrigger::Release);
         tree.set_callback(move |t| {
             if let Some(mut selected) = t.first_selected_item() {
-                if selected.depth() == 3 {
-                    selected.deselect();
-                    selected.parent().unwrap().select_toggle();
+                match t.callback_reason() {
+                    TreeReason::Selected => match selected.depth() {
+                        1 => {
+                            btn_connect.activate();
+                            btn_connect.set_label("Connect");
+                            btn_new_room.activate();
+                        }
+                        2 => {
+                            btn_connect.activate();
+                            btn_connect.set_label("Join");
+                            btn_new_room.activate();
+                        }
+                        // clicking room users selects room
+                        3 => {
+                            selected.deselect();
+                            selected.parent().unwrap().select_toggle();
+                        }
+                        _ => unreachable!(),
+                    },
+                    TreeReason::Reselected => {}
+                    _ => {}
                 }
-                btn_connect.activate();
             } else {
                 btn_connect.deactivate();
+                btn_connect.set_label("Connect");
+                btn_new_room.deactivate();
             }
         });
         main_win.add(&tree);
