@@ -126,6 +126,17 @@ impl Shared {
         }
     }
 
+    async fn notify(&mut self, notification: Notification) {
+        let m = Message::Notification(notification);
+        for p in self.waiting_peers.values_mut() {
+            let _ = p.tx.send(m.clone());
+        }
+
+        for r in self.rooms.values_mut() {
+            r.broadcast(&m).await;
+        }
+    }
+
     fn room_list_notification(&self) -> Notification {
         let list: Vec<RoomListing> = self
             .rooms
@@ -301,6 +312,9 @@ async fn leave_room(
 
     state.waiting_peers.insert(peer.id.clone(), handle);
 
+    let room_list = state.room_list_notification();
+    state.notify(room_list).await;
+
     Ok(true)
 }
 
@@ -333,10 +347,8 @@ async fn join_room(
     peer.notify(room.playing_notification()).await?;
     peer.notify(room.queue_notification()).await?;
 
-    drop(state);
-
-    let state = state_mutex.lock().await;
-    peer.notify(state.room_list_notification()).await?;
+    let room_list = state.room_list_notification();
+    state.notify(room_list).await;
 
     Ok(true)
 }
@@ -499,6 +511,9 @@ async fn handle_request(
 
             let room = Room::new(options.clone());
             state.rooms.insert(room_id, room);
+
+            let room_list = state.room_list_notification();
+            state.notify(room_list).await;
 
             Ok(Some(Response::CreateRoomResponse(room_id)))
         }
