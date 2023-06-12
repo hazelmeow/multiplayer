@@ -224,7 +224,7 @@ impl UIThread {
                                         2 => unsafe {
                                             // room selected
                                             (
-                                                Some(item.user_data().unwrap()),
+                                                item.user_data(),
                                                 item.parent().unwrap().user_data().unwrap(),
                                             )
                                         },
