@@ -73,6 +73,9 @@ impl ConnectionWindow {
         // tree.add("");
 
         tree.set_trigger(CallbackTrigger::Release);
+        tree.set_item_reselect_mode(fltk::tree::TreeItemReselectMode::Always);
+
+        let s2 = s.clone();
         tree.set_callback(move |t| {
             if let Some(mut selected) = t.first_selected_item() {
                 match t.callback_reason() {
@@ -94,7 +97,10 @@ impl ConnectionWindow {
                         }
                         _ => unreachable!(),
                     },
-                    TreeReason::Reselected => {}
+                    TreeReason::Reselected => match selected.depth() {
+                        1 | 2 => s2.send(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnConnect)),
+                        _ => {}
+                    },
                     _ => {}
                 }
             } else {
