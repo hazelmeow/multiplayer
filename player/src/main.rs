@@ -68,6 +68,47 @@ pub struct RoomState {
     connected_users: HashMap<String, String>,
 }
 
+impl State {
+    fn is_connected(&self) -> bool {
+        if let Some(c) = &self.connection {
+            return true;
+        }
+        false
+    }
+    fn is_in_room(&self) -> bool {
+        if let Some(c) = &self.connection {
+            if let Some(r) = &c.room {
+                return true;
+            }
+        }
+        false
+    }
+    fn is_transmitting(&self) -> bool {
+        if let Some(c) = &self.connection {
+            if let Some(r) = &c.room {
+                if let Some(p) = &r.playing {
+                    if p.owner == self.my_id {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+    fn is_receiving(&self) -> bool {
+        if let Some(c) = &self.connection {
+            if let Some(r) = &c.room {
+                if let Some(p) = &r.playing {
+                    if p.owner != self.my_id {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+}
+
 struct MainThread {
     state: Arc<RwLock<State>>,
 
@@ -243,16 +284,10 @@ impl MainThread {
                         UIEvent::BtnNext => {
                             let Some(conn) = self.connection.as_mut() else { continue };
                             let s = self.state.read().await;
-                            let c = s.connection.as_ref().unwrap();
-
-                            if let Some(r) = &c.room {
-                                if let Some(p) = &r.playing {
-                                    if p.owner == s.my_id {
-                                        conn.transmit.send(TransmitCommand::Stop).unwrap();
-                                    }
-                                }
+                            if s.is_transmitting() {
+                                conn.transmit.send(TransmitCommand::Stop).unwrap();
                             }
-                        }
+                       }
                         UIEvent::Pause => {
 
                         }
