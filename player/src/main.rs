@@ -342,6 +342,8 @@ impl MainThread {
                 println!("error while connecting: {:?}", e);
             }
         }
+
+        self.ui.update(UIUpdateEvent::Status);
     }
 
     fn disconnect(&mut self) {

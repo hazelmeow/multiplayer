@@ -410,6 +410,7 @@ impl ConnectionActor {
                 room.queue = queue;
 
                 self.ui.update(UIUpdateEvent::QueueChanged);
+                self.ui.update(UIUpdateEvent::Status);
             }
             Notification::Playing(playing) => {
                 println!("got playing: {:?}", playing);
@@ -423,6 +424,9 @@ impl ConnectionActor {
                         self.transmit.send(TransmitCommand::Start(path)).unwrap();
                     }
                 }
+
+                self.ui.update(UIUpdateEvent::QueueChanged);
+                self.ui.update(UIUpdateEvent::Status);
             }
             Notification::ConnectedUsers(list) => {
                 let mut room = conn.room.as_mut().expect("lol");
@@ -449,6 +453,7 @@ impl ConnectionActor {
                 self.ui.update(UIUpdateEvent::RoomChanged);
                 self.ui.update(UIUpdateEvent::QueueChanged);
                 self.ui.update(UIUpdateEvent::UserListChanged);
+                self.ui.update(UIUpdateEvent::Status);
             }
             Notification::RoomList(list) => {
                 let name = conn.addr.split(":").next().unwrap();
