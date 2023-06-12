@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use fltk::app::Sender;
 use fltk::browser::*;
 use fltk::button::*;
@@ -9,6 +11,9 @@ use fltk::tree::Tree;
 use fltk::tree::TreeItem;
 use fltk::tree::TreeReason;
 use fltk::window::*;
+use tokio::sync::RwLock;
+
+use crate::State;
 
 use super::add_bar;
 use super::ConnectionDlgEvent;
@@ -17,10 +22,11 @@ use super::UIEvent;
 pub struct ConnectionWindow {
     pub main_win: Window,
     pub tree: Tree,
+    state: Arc<RwLock<State>>,
 }
 
 impl ConnectionWindow {
-    pub fn make_window(s: Sender<UIEvent>) -> Self {
+    pub fn make_window(s: Sender<UIEvent>, state: Arc<RwLock<State>>) -> Self {
         let mut main_win = Window::new(100, 100, 330, 300, "queue");
         main_win.set_frame(FrameType::UpBox);
 
@@ -64,7 +70,7 @@ impl ConnectionWindow {
         let mut tree = Tree::default().with_size(210, 230).with_pos(10, 32);
         tree.set_show_root(false);
 
-        tree.add("unpopulated");
+        // tree.add("");
 
         tree.set_trigger(CallbackTrigger::Release);
         tree.set_callback(move |t| {
@@ -101,7 +107,11 @@ impl ConnectionWindow {
 
         main_win.end();
 
-        Self { main_win, tree }
+        Self {
+            main_win,
+            tree,
+            state,
+        }
     }
 
     pub fn populate(&mut self, list: Vec<Server>) {
@@ -110,23 +120,9 @@ impl ConnectionWindow {
         tree.begin();
         for server in list {
             let mut item = tree.add(&server.name).unwrap();
-            item.set_user_data(server.addr);
-            if let Some(rooms) = &server.rooms {
-                for room in rooms {
-                    let line = &format!("{}/{}", server.name, room.id);
-                    if let Some(mut sub_item) = tree.add(&line) {
-                        sub_item.set_user_data(room.id);
-                        sub_item.close();
-                        for user in &room.user_names {
-                            tree.add(&format!("{}/{}", line, user));
-                        }
-                        let actual_line = &format!("{} ({})", room.name, room.user_names.len());
-                        sub_item.set_label(actual_line);
-                    }
-                }
-            } else {
-                tree.add(&format!("{}/(unable to connect)", server.name));
-            }
+            item.set_user_data(server.addr.clone());
+
+            Self::populate_server_item(self.state.clone(), tree, item, server);
         }
         tree.end();
         tree.redraw();
@@ -137,26 +133,50 @@ impl ConnectionWindow {
         if let Some(mut item) = tree.find_item(&server.name) {
             item.clear_children();
 
-            if let Some(rooms) = &server.rooms {
-                for room in rooms {
-                    let line = &format!("{}/{}", server.name, room.id);
-                    if let Some(mut sub_item) = tree.add(&line) {
-                        sub_item.set_user_data(room.id);
-                        sub_item.close();
-                        for user in &room.user_names {
-                            tree.add(&format!("{}/{}", line, user));
-                        }
-                        let actual_line = &format!("{} ({})", room.name, room.user_names.len());
-                        sub_item.set_label(actual_line);
-                    }
-                }
-            } else {
-                eprintln!("uhhhhhh should never happen,,,,,,,,,,,");
-            }
+            Self::populate_server_item(self.state.clone(), tree, item, server)
         } else {
             println!("couldn't find {} ????", server.name);
         }
         tree.redraw();
+    }
+
+    fn populate_server_item(
+        state: Arc<RwLock<State>>,
+        tree: &mut Tree,
+        mut item: TreeItem,
+        server: Server,
+    ) {
+        // for paths to work right
+        item.set_label(&server.addr);
+
+        if let Some(rooms) = &server.rooms {
+            for room in rooms {
+                let line = &format!("{}/{}", server.addr, room.id);
+                if let Some(mut sub_item) = tree.add(&line) {
+                    sub_item.set_user_data(room.id);
+                    sub_item.close();
+                    for user in &room.user_names {
+                        tree.add(&format!("{}/{}", line, user));
+                    }
+                    let actual_line = &format!("{} ({})", room.name, room.user_names.len());
+                    sub_item.set_label(actual_line);
+                }
+            }
+        } else {
+            tree.add(&format!("{}/(unable to connect)", server.addr));
+        }
+
+        // connected indicator
+        let state = state.blocking_read();
+        item.set_label(&server.name);
+        item.set_label_font(Font::Helvetica);
+        if let Some(c) = &state.connection {
+            if c.addr == server.addr {
+                // text doesn't look that good and also it breaks tree.find_item...
+                item.set_label(&format!("{}", &server.name));
+                item.set_label_font(Font::HelveticaBold);
+            }
+        }
     }
 }
 

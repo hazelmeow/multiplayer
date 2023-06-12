@@ -150,7 +150,7 @@ impl UIThread {
 
         let mut gui = MainWindow::make_window(sender.clone());
         let mut queue_gui = QueueWindow::make_window(sender.clone());
-        let mut connection_gui = ConnectionWindow::make_window(sender.clone());
+        let mut connection_gui = ConnectionWindow::make_window(sender.clone(), state.clone());
 
         // stuff for cool custom titlebars
         gui.main_win.set_border(false);
