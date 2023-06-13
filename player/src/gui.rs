@@ -65,6 +65,7 @@ pub enum UIUpdateEvent {
     QueueChanged,
     UpdateConnectionTree(Vec<self::connection_window::Server>),
     UpdateConnectionTreePartial(self::connection_window::Server),
+    ConnectionChanged,
     Status,
     Visualizer([u8; 14]),
     Buffer(u8),
@@ -416,6 +417,9 @@ impl UIThread {
             }
             UIUpdateEvent::UpdateConnectionTreePartial(server) => {
                 self.connection_gui.update_just_one_server(server);
+            }
+            UIUpdateEvent::ConnectionChanged => {
+                self.connection_gui.update_connected();
             }
             _ => {
                 dbg!(evt);

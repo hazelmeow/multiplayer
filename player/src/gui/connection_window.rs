@@ -146,6 +146,25 @@ impl ConnectionWindow {
         tree.redraw();
     }
 
+    pub fn update_connected(&mut self) {
+        let state = self.state.blocking_read();
+        let tree = &mut self.tree;
+        for mut item in tree.get_items().unwrap_or_default() {
+            if item.depth() == 1 {
+                unsafe {
+                    let addr: String = item.user_data().unwrap();
+                    item.set_label_font(Font::Helvetica);
+                    if let Some(c) = &state.connection {
+                        if c.addr == addr {
+                            item.set_label_font(Font::HelveticaBold);
+                        }
+                    }
+                }
+            }
+        }
+        tree.redraw();
+    }
+
     fn populate_server_item(
         state: Arc<RwLock<State>>,
         tree: &mut Tree,
@@ -169,7 +188,11 @@ impl ConnectionWindow {
                 }
             }
         } else {
-            tree.add(&format!("{}/(unable to connect)", server.addr));
+            if server.tried {
+                tree.add(&format!("{}/(unable to connect)", server.addr));
+            } else {
+                tree.add(&format!("{}/(querying...)", server.addr));
+            }
         }
 
         // connected indicator
@@ -191,4 +214,5 @@ pub struct Server {
     pub name: String,
     pub addr: String,
     pub rooms: Option<Vec<protocol::RoomListing>>,
+    pub tried: bool, // we want to list them without showing unable to connect if we didn't try yet
 }

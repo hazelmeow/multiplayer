@@ -17,6 +17,7 @@ mod audio;
 use crate::audio::AudioCommand;
 
 mod gui;
+use crate::gui::connection_window::Server;
 use crate::gui::{ConnectionDlgEvent, UIEvent, UIThread, UIUpdateEvent};
 
 use protocol::{RoomOptions, Track};
@@ -159,18 +160,22 @@ impl MainThread {
             tokio::select! {
                 // watch for connection exits
                 Some(()) = maybe_connection_exited(&self.connection) => {
-                    self.disconnect();
+                    self.disconnect().await;
                 }
 
                 // some ui event
                 Some(event) = self.ui_rx.recv() => {
                     match event {
                         UIEvent::Connect(addr) => {
-                            if self.connection.is_none() {
-                                self.connect(addr).await;
-                                if let Some(c) = &mut self.connection {
-                                    c.refresh_room_list().unwrap();
+                            if self.connection.is_some() {
+                                let current_addr = self.state.read().await.connection.as_ref().unwrap().addr.clone();
+                                if current_addr != addr {
+                                    self.disconnect().await;
+
+                                    self.connect(addr).await;
                                 }
+                            } else {
+                                self.connect(addr).await;
                             }
                         }
 
@@ -183,23 +188,22 @@ impl MainThread {
 
                         UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh) => {
                             let servers_tmp = vec!["127.0.0.1:8080", "example.com:443"];
-                            let mut servers: Vec<crate::gui::connection_window::Server> = vec![];
-                            // TODO: query everything in ~parallel~
+
+                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers_tmp.iter().map(|s| Server {
+                                addr: s.to_string(),
+                                name: s.to_string().split(":").next().unwrap().into(),
+                                rooms: None,
+                                tried: false,
+                            }).collect()));
+
                             for addr in servers_tmp {
-                                let name = addr.split(":").next().unwrap();
-                                let rooms_future = connection::query_room_list(addr);
-                                let mut s = crate::gui::connection_window::Server {
-                                    name: name.into(),
-                                    addr: addr.into(),
-                                    rooms: None,
-                                };
-                                if let Ok(rooms) = rooms_future.await {
-                                    s.rooms = Some(rooms);
-                                }
-                                servers.push(s);
+                                let mut ui2 = self.ui.clone();
+                                tokio::spawn(async move {
+                                    let name = addr.split(":").next().unwrap();
+                                    let s = connection::query_server(name, addr).await;
+                                    ui2.update(UIUpdateEvent::UpdateConnectionTreePartial(s));
+                                });
                             }
-                            println!("sending event: {:?}", servers);
-                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers));
                         },
 
                         UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnNewRoom) => {
@@ -291,9 +295,10 @@ impl MainThread {
                             if s.is_transmitting() {
                                 conn.transmit.send(TransmitCommand::Stop).unwrap();
                             }
-                       }
-                        UIEvent::Pause => {
-
+                        }
+                        UIEvent::BtnPause => {
+                            // TODO UNDO ME
+                            self.disconnect().await;
                         }
                         UIEvent::Stop => {
                             // TODO do this obviously
@@ -347,16 +352,33 @@ impl MainThread {
             }
         }
 
+        self.ui.update(UIUpdateEvent::ConnectionChanged);
         self.ui.update(UIUpdateEvent::Status);
     }
 
-    fn disconnect(&mut self) {
+    async fn disconnect(&mut self) {
         // unset the connection handle which drops the thread and starts cleanup
         // ""RAII""
         self.connection = None;
 
-        self.state.blocking_write().connection = None;
+        let mut state = self.state.write().await;
 
+        // query old server's list after we disconnect so it updates properly?
+        if let Some(c) = &state.connection {
+            let mut ui2 = self.ui.clone();
+            let addr = c.addr.clone();
+            tokio::spawn(async move {
+                let name = addr.split(":").next().unwrap();
+                let s = connection::query_server(name, &addr).await;
+                ui2.update(UIUpdateEvent::UpdateConnectionTreePartial(s));
+            });
+        }
+
+        state.connection = None;
+
+        drop(state);
+
+        self.ui.update(UIUpdateEvent::ConnectionChanged);
         self.ui.update(UIUpdateEvent::Status);
     }
 }

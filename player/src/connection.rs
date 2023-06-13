@@ -8,18 +8,15 @@ use futures::StreamExt;
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot, RwLock},
-    task::block_in_place,
     time::timeout,
 };
 
-use protocol::{
-    network::FrameStream, AudioData, Message, Notification, Request, Response, RoomListing,
-    RoomOptions, Track,
-};
+use protocol::{network::FrameStream, RoomListing};
+use protocol::{AudioData, Message, Notification, Request, Response, RoomOptions, Track};
 
 use crate::{
     audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
-    gui::{UIThreadHandle, UIUpdateEvent},
+    gui::{connection_window::Server, UIThreadHandle, UIUpdateEvent},
     transmit::{TransmitCommand, TransmitThread, TransmitThreadHandle},
     AudioStatus, ConnectionState, RoomState, State,
 };
@@ -281,7 +278,7 @@ impl ConnectionActor {
 
                         // stream disconnected
                         None => {
-                            dbg!("stream disconnected");
+                            println!("stream disconnected");
                             break;
                         },
                     }
@@ -367,11 +364,7 @@ impl ConnectionActor {
                                 .connection
                                 .as_mut()
                                 .unwrap()
-                        {
-                            let mut state = self.state.write().await;
-                            let room = state.connection.as_mut().unwrap().room.as_mut().unwrap();
-                            room.is_synced = true;
-                        }
+                                .room
                                 .as_mut()
                                 .unwrap();
                             room_write.is_synced = true;
@@ -386,7 +379,11 @@ impl ConnectionActor {
                             .unwrap();
                     }
                     protocol::AudioData::Start => {
-                        self.is_synced = true;
+                        {
+                            let mut state = self.state.write().await;
+                            let room = state.connection.as_mut().unwrap().room.as_mut().unwrap();
+                            room.is_synced = true;
+                        }
                         self.audio.send(AudioCommand::AudioData(data)).unwrap();
                     }
                     _ => {
@@ -469,10 +466,29 @@ impl ConnectionActor {
                     name: name.into(),
                     addr: conn.addr.clone(),
                     rooms: Some(list),
+                    tried: true,
                 };
                 self.ui
                     .update(UIUpdateEvent::UpdateConnectionTreePartial(s));
             }
+        }
+    }
+}
+
+pub async fn query_server(name: &str, addr: &str) -> Server {
+    if let Ok(rooms) = query_room_list(addr).await {
+        Server {
+            name: name.into(),
+            addr: addr.into(),
+            rooms: Some(rooms),
+            tried: true,
+        }
+    } else {
+        Server {
+            name: name.into(),
+            addr: addr.into(),
+            rooms: None,
+            tried: true,
         }
     }
 }
