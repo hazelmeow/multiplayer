@@ -25,6 +25,7 @@ pub mod marquee_label;
 pub mod queue_window;
 pub mod visualizer;
 
+use crate::preferences::Server;
 use crate::State;
 
 use self::connection_window::ConnectionWindow;
@@ -41,7 +42,7 @@ pub enum UIEvent {
     BtnPrev,
     BtnQueue,
     BtnOpenConnectionDialog,
-    Connect(String),
+    Connect(Server),
     JoinRoom(u32),
     VolumeSlider(f32),
     VolumeUp,
@@ -63,8 +64,8 @@ pub enum UIUpdateEvent {
     UserListChanged,
     RoomChanged,
     QueueChanged,
-    UpdateConnectionTree(Vec<self::connection_window::Server>),
-    UpdateConnectionTreePartial(self::connection_window::Server),
+    UpdateConnectionTree(Vec<self::connection_window::ServerStatus>),
+    UpdateConnectionTreePartial(self::connection_window::ServerStatus),
     ConnectionChanged,
     Status,
     Visualizer([u8; 14]),
@@ -216,7 +217,7 @@ impl UIThread {
                     UIEvent::ConnectionDlg(evt) => match evt {
                         ConnectionDlgEvent::BtnConnect => {
                             if let Some(item) = self.connection_gui.tree.first_selected_item() {
-                                let (maybe_room_id, server_addr): (Option<u32>, String) =
+                                let (maybe_room_id, server): (Option<u32>, Server) =
                                     match item.depth() {
                                         1 => unsafe {
                                             // server selected
@@ -232,7 +233,7 @@ impl UIThread {
                                         _ => unreachable!(),
                                     };
 
-                                self.tx.send(UIEvent::Connect(server_addr)).unwrap();
+                                self.tx.send(UIEvent::Connect(server)).unwrap();
                                 if let Some(room_id) = maybe_room_id {
                                     self.tx.send(UIEvent::JoinRoom(room_id)).unwrap();
                                 }
@@ -472,11 +473,11 @@ impl UIThread {
                         return format!("Playing (receiving from {:?})", t.owner);
                     }
                 } else {
-                    return format!("Connected to {}/{}", connection.addr, r.name);
+                    return format!("Connected to {}/{}", connection.server.addr, r.name);
                 }
             }
 
-            return format!("Connected to {}", connection.addr);
+            return format!("Connected to {}", connection.server.addr);
         } else {
             format!("<not connected>")
         }

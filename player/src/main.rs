@@ -9,6 +9,8 @@ use tokio::sync::RwLock;
 
 mod connection;
 mod key;
+mod preferences;
+use crate::preferences::Server;
 
 mod transmit;
 use transmit::{AudioInfoReader, TransmitCommand};
@@ -17,7 +19,7 @@ mod audio;
 use crate::audio::AudioCommand;
 
 mod gui;
-use crate::gui::connection_window::Server;
+use crate::gui::connection_window::ServerStatus;
 use crate::gui::{ConnectionDlgEvent, UIEvent, UIThread, UIUpdateEvent};
 
 use protocol::{RoomOptions, Track};
@@ -53,7 +55,7 @@ pub struct State {
 }
 
 pub struct ConnectionState {
-    addr: String,
+    server: Server,
     room: Option<RoomState>,
 }
 
@@ -166,16 +168,16 @@ impl MainThread {
                 // some ui event
                 Some(event) = self.ui_rx.recv() => {
                     match event {
-                        UIEvent::Connect(addr) => {
+                        UIEvent::Connect(server) => {
                             if self.connection.is_some() {
-                                let current_addr = self.state.read().await.connection.as_ref().unwrap().addr.clone();
-                                if current_addr != addr {
+                                let current_addr = self.state.read().await.connection.as_ref().unwrap().server.addr.clone();
+                                if current_addr != server.addr {
                                     self.disconnect().await;
 
-                                    self.connect(addr).await;
+                                    self.connect(server).await;
                                 }
                             } else {
-                                self.connect(addr).await;
+                                self.connect(server).await;
                             }
                         }
 
@@ -187,20 +189,23 @@ impl MainThread {
                         }
 
                         UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh) => {
-                            let servers_tmp = vec!["127.0.0.1:8080", "example.com:443"];
+                            let servers_tmp = vec![
+                                Server {
+                                    name: "local".into(),
+                                    addr: "127.0.0.1:8080".into(),
+                                },
+                                Server {
+                                    name: "example.com".into(),
+                                    addr: "example.com:443".into(),
+                                },
+                            ];
 
-                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers_tmp.iter().map(|s| Server {
-                                addr: s.to_string(),
-                                name: s.to_string().split(":").next().unwrap().into(),
-                                rooms: None,
-                                tried: false,
-                            }).collect()));
+                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers_tmp.iter().map(|s| ServerStatus::from(s.clone())).collect()));
 
-                            for addr in servers_tmp {
+                            for server in servers_tmp {
                                 let mut ui2 = self.ui.clone();
                                 tokio::spawn(async move {
-                                    let name = addr.split(":").next().unwrap();
-                                    let s = connection::query_server(name, addr).await;
+                                    let s = connection::query_server(server).await;
                                     ui2.update(UIUpdateEvent::UpdateConnectionTreePartial(s));
                                 });
                             }
@@ -347,8 +352,8 @@ impl MainThread {
         }
     }
 
-    async fn connect(&mut self, addr: String) {
-        let result = ConnectionActor::spawn(self.state.clone(), self.ui.clone(), addr).await;
+    async fn connect(&mut self, server: Server) {
+        let result = ConnectionActor::spawn(self.state.clone(), self.ui.clone(), server).await;
         match result {
             Ok(c) => {
                 self.connection = Some(c);
@@ -373,10 +378,9 @@ impl MainThread {
         // query old server's list after we disconnect so it updates properly?
         if let Some(c) = &state.connection {
             let mut ui2 = self.ui.clone();
-            let addr = c.addr.clone();
+            let server = c.server.clone();
             tokio::spawn(async move {
-                let name = addr.split(":").next().unwrap();
-                let s = connection::query_server(name, &addr).await;
+                let s = connection::query_server(server).await;
                 ui2.update(UIUpdateEvent::UpdateConnectionTreePartial(s));
             });
         }

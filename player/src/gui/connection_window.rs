@@ -1,3 +1,4 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use fltk::app::Sender;
@@ -13,6 +14,7 @@ use fltk::tree::TreeReason;
 use fltk::window::*;
 use tokio::sync::RwLock;
 
+use crate::preferences::Server;
 use crate::State;
 
 use super::add_bar;
@@ -120,13 +122,13 @@ impl ConnectionWindow {
         }
     }
 
-    pub fn populate(&mut self, list: Vec<Server>) {
+    pub fn populate(&mut self, list: Vec<ServerStatus>) {
         let tree = &mut self.tree;
         tree.clear();
         tree.begin();
         for server in list {
             let mut item = tree.add(&server.name).unwrap();
-            item.set_user_data(server.addr.clone());
+            item.set_user_data(server.inner.clone());
 
             Self::populate_server_item(self.state.clone(), tree, item, server);
         }
@@ -134,7 +136,7 @@ impl ConnectionWindow {
         tree.redraw();
     }
 
-    pub fn update_just_one_server(&mut self, server: Server) {
+    pub fn update_just_one_server(&mut self, server: ServerStatus) {
         let tree = &mut self.tree;
         if let Some(mut item) = tree.find_item(&server.name) {
             item.clear_children();
@@ -155,7 +157,7 @@ impl ConnectionWindow {
                     let addr: String = item.user_data().unwrap();
                     item.set_label_font(Font::Helvetica);
                     if let Some(c) = &state.connection {
-                        if c.addr == addr {
+                        if c.server.addr == addr {
                             item.set_label_font(Font::HelveticaBold);
                         }
                     }
@@ -169,7 +171,7 @@ impl ConnectionWindow {
         state: Arc<RwLock<State>>,
         tree: &mut Tree,
         mut item: TreeItem,
-        server: Server,
+        server: ServerStatus,
     ) {
         // for paths to work right
         item.set_label(&server.addr);
@@ -200,7 +202,7 @@ impl ConnectionWindow {
         item.set_label(&server.name);
         item.set_label_font(Font::Helvetica);
         if let Some(c) = &state.connection {
-            if c.addr == server.addr {
+            if c.server.addr == server.addr {
                 // text doesn't look that good and also it breaks tree.find_item...
                 item.set_label(&format!("{}", &server.name));
                 item.set_label_font(Font::HelveticaBold);
@@ -210,9 +212,27 @@ impl ConnectionWindow {
 }
 
 #[derive(Debug, Clone)]
-pub struct Server {
-    pub name: String,
-    pub addr: String,
+pub struct ServerStatus {
+    pub inner: Server,
+
     pub rooms: Option<Vec<protocol::RoomListing>>,
     pub tried: bool, // we want to list them without showing unable to connect if we didn't try yet
+}
+
+impl Deref for ServerStatus {
+    type Target = Server;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl From<Server> for ServerStatus {
+    fn from(value: Server) -> Self {
+        ServerStatus {
+            inner: value,
+            rooms: None,
+            tried: false,
+        }
+    }
 }

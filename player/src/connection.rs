@@ -16,7 +16,8 @@ use protocol::{AudioData, Message, Notification, Request, Response, RoomOptions,
 
 use crate::{
     audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
-    gui::{connection_window::Server, UIThreadHandle, UIUpdateEvent},
+    gui::{connection_window::ServerStatus, UIThreadHandle, UIUpdateEvent},
+    preferences::Server,
     transmit::{TransmitCommand, TransmitThread, TransmitThreadHandle},
     AudioStatus, ConnectionState, RoomState, State,
 };
@@ -135,7 +136,7 @@ impl ConnectionActor {
     pub async fn spawn(
         state: Arc<RwLock<State>>,
         ui: UIThreadHandle,
-        addr: String,
+        server: Server,
     ) -> Result<ConnectionActorHandle, Box<dyn Error>> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -156,7 +157,7 @@ impl ConnectionActor {
         tokio::spawn(async move {
             let mut t = ConnectionActor::new(
                 state2,
-                addr,
+                server,
                 ui,
                 transmit2,
                 audio2,
@@ -202,7 +203,7 @@ impl ConnectionActor {
 
     pub async fn new(
         state: Arc<RwLock<State>>,
-        addr: String,
+        server: Server,
         ui: UIThreadHandle,
         transmit: TransmitThreadHandle,
         audio: AudioThreadHandle,
@@ -210,10 +211,10 @@ impl ConnectionActor {
         audio_status_rx: AudioStatusRx,
         rx: mpsc::UnboundedReceiver<Command>,
     ) -> Result<Self, tokio::io::Error> {
-        let tcp_stream = TcpStream::connect(addr.clone()).await?;
+        let tcp_stream = TcpStream::connect(&server.addr).await?;
         let stream = FrameStream::new(tcp_stream);
 
-        state.write().await.connection = Some(ConnectionState { addr, room: None });
+        state.write().await.connection = Some(ConnectionState { server, room: None });
 
         Ok(ConnectionActor {
             state,
@@ -461,10 +462,9 @@ impl ConnectionActor {
                 self.ui.update(UIUpdateEvent::Status);
             }
             Notification::RoomList(list) => {
-                let name = conn.addr.split(":").next().unwrap();
-                let s = crate::gui::connection_window::Server {
-                    name: name.into(),
-                    addr: conn.addr.clone(),
+                // TODO: we should probably do the server status state differently
+                let s: ServerStatus = crate::gui::connection_window::ServerStatus {
+                    inner: conn.server.clone(),
                     rooms: Some(list),
                     tried: true,
                 };
@@ -475,18 +475,16 @@ impl ConnectionActor {
     }
 }
 
-pub async fn query_server(name: &str, addr: &str) -> Server {
-    if let Ok(rooms) = query_room_list(addr).await {
-        Server {
-            name: name.into(),
-            addr: addr.into(),
+pub async fn query_server(server: Server) -> ServerStatus {
+    if let Ok(rooms) = query_room_list(&server.addr).await {
+        ServerStatus {
+            inner: server,
             rooms: Some(rooms),
             tried: true,
         }
     } else {
-        Server {
-            name: name.into(),
-            addr: addr.into(),
+        ServerStatus {
+            inner: server,
             rooms: None,
             tried: true,
         }
