@@ -39,7 +39,6 @@ pub struct ConnectionActorHandle {
     pub audio: AudioThreadHandle,
 
     tx: mpsc::UnboundedSender<Command>,
-    shutdown_tx: oneshot::Sender<()>, // TODO do we actually shut down properly????
 }
 
 impl ConnectionActorHandle {
@@ -138,7 +137,6 @@ pub struct ConnectionActor {
     audio_status_rx: AudioStatusRx,
 
     rx: mpsc::UnboundedReceiver<Command>,
-    shutdown: oneshot::Receiver<()>,
 }
 
 impl ConnectionActor {
@@ -148,7 +146,6 @@ impl ConnectionActor {
         addr: String,
     ) -> Result<ConnectionActorHandle, Box<dyn Error>> {
         let (tx, rx) = mpsc::unbounded_channel();
-        let (shutdown_tx, shutdown_rx) = oneshot::channel();
 
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<AudioCommand>();
         let (audio_status_tx, audio_status_rx) = mpsc::unbounded_channel::<AudioStatus>();
@@ -174,7 +171,6 @@ impl ConnectionActor {
                 audio_data_rx,
                 audio_status_rx,
                 rx,
-                shutdown_rx,
             )
             .await
             // TODO
@@ -186,7 +182,6 @@ impl ConnectionActor {
             transmit,
             audio,
             tx,
-            shutdown_tx,
         };
 
         // do required connection stuff first
@@ -222,7 +217,6 @@ impl ConnectionActor {
         audio_data_rx: mpsc::UnboundedReceiver<AudioData>,
         audio_status_rx: AudioStatusRx,
         rx: mpsc::UnboundedReceiver<Command>,
-        shutdown_rx: oneshot::Receiver<()>,
     ) -> Result<Self, tokio::io::Error> {
         let tcp_stream = TcpStream::connect(addr.clone()).await?;
         let stream = FrameStream::new(tcp_stream);
@@ -250,7 +244,6 @@ impl ConnectionActor {
             audio_status_rx,
 
             rx,
-            shutdown: shutdown_rx,
         })
     }
 
@@ -258,19 +251,26 @@ impl ConnectionActor {
         loop {
             tokio::select! {
                 // received a command with a message to send to the server
-                Some(command) = self.rx.recv() => {
-                    match command {
-                        Command::Request(data, sender) => {
-                            let id = self.next_id;
-                            self.next_id += 1;
+                result = self.rx.recv() => {
+                    match result {
+                        Some(command) => match command {
+                            Command::Request(data, sender) => {
+                                let id = self.next_id;
+                                self.next_id += 1;
 
-                            self.pending.insert(id, sender);
+                                self.pending.insert(id, sender);
 
-                            self.stream.send(&Message::Request { request_id: id, data }).await.unwrap();
+                                self.stream.send(&Message::Request { request_id: id, data }).await.unwrap();
+                            }
+
+                            Command::Plain(message) => {
+                                self.stream.send(&message).await.unwrap();
+                            }
                         }
-
-                        Command::Plain(message) => {
-                            self.stream.send(&message).await.unwrap();
+                        // channel closed or all senders have been dropped
+                        None => {
+                            println!("connection rx closed, shutting down connection");
+                            break;
                         }
                     }
                 }
@@ -336,8 +336,6 @@ impl ConnectionActor {
                         }
                     }
                 },
-
-                _ = &mut self.shutdown => break,
             }
         }
 
