@@ -243,20 +243,27 @@ impl MainThread {
                                         let my_id = s.my_id.clone();
 
                                         tokio::spawn(async move {
-                                            if let Ok(mut reader) = AudioInfoReader::load(&file) {
-                                                if let Ok((_, _, metadata)) = reader.read_info() {
-                                                    let track = protocol::Track {
-                                                        path: encrypted_path,
-                                                        owner: my_id,
-                                                        metadata
-                                                    };
-
-                                                    Some(track)
-                                                } else {
+                                            match AudioInfoReader::load(&file) {
+                                                Ok(mut reader) => {
+                                                    match reader.read_info() {
+                                                        Ok((_, _, metadata)) => {
+                                                            let track = protocol::Track {
+                                                                path: encrypted_path,
+                                                                owner: my_id,
+                                                                metadata
+                                                            };
+                                                            Some(track)
+                                                        }
+                                                        Err(e) => {
+                                                            println!("errored reading metadata for {file}: {e}");
+                                                            None
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    println!("errored loading {file}: {e}");
                                                     None
                                                 }
-                                            } else {
-                                                None
                                             }
                                         })
                                     })

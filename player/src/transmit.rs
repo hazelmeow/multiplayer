@@ -439,12 +439,15 @@ impl TransmitThread {
                     return true;
                 }
 
-                if let Ok(r) = AudioReader::load(&path) {
-                    self.audio_reader = Some(r);
+                match AudioReader::load(&path) {
+                    Ok(r) => {
+                        self.audio_reader = Some(r);
 
-                    self.send_both(AudioData::Start);
-                } else {
-                    // failed to load file, need to skip it somehow?
+                        self.send_both(AudioData::Start);
+                    }
+                    Err(e) => {
+                        println!("failed to load {path} while transmitting: {e}")
+                    }
                 }
             }
             TransmitCommand::Stop => {
