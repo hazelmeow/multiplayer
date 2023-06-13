@@ -148,7 +148,7 @@ impl AudioInfoReader {
         // just assume there's only one visual in the file?
         if let Some(v) = visuals.first() {
             match v.media_type.as_str() {
-                "image/png" | "image/jpeg" => {
+                "image/png" | "image/jpg" | "image/jpeg" => {
                     let reader = image::io::Reader::new(Cursor::new(v.data.clone()))
                         .with_guessed_format()
                         .expect("cursor io never fails");
