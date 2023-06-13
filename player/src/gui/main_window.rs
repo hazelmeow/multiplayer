@@ -100,14 +100,14 @@ impl MainWindow {
         main_win.add(&seek_bar);
 
         let mut status_field = Group::new(
-            1,
-            main_win.height() - 21,
-            main_win.width() - 4,
-            20,
+            3,
+            main_win.height() - 20,
+            main_win.width() - 6,
+            16,
             "status",
         );
         status_field.set_align(Align::Left | Align::Inside);
-        status_field.set_frame(FrameType::DownBox);
+        status_field.set_frame(FrameType::ThinDownBox);
 
         let mut status_right_display = Frame::new(
             status_field.x(),
@@ -220,7 +220,7 @@ use winapi::shared::windef::HWND;
 
 #[cfg(target_os = "windows")]
 use winapi::um::winuser::{
-    GetWindowLongPtrW, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, SW_HIDE, SW_SHOW,
+    GetWindowLongPtrW, SetWindowLongPtrW, ShowWindow, GWL_EXSTYLE, GWL_STYLE, SW_HIDE, SW_SHOW,
 };
 
 // this is fucking cursed
@@ -228,8 +228,18 @@ use winapi::um::winuser::{
 unsafe fn shitty_windows_only_hack(w: &mut DoubleWindow) {
     let handle: HWND = std::mem::transmute(w.raw_handle());
     ShowWindow(handle, SW_HIDE);
-    let mut style = GetWindowLongPtrW(handle, GWL_EXSTYLE);
-    style |= 0x00040000; // WS_EX_APPWINDOW
-    SetWindowLongPtrW(handle, GWL_EXSTYLE, style);
+
+    let mut exstyle = GetWindowLongPtrW(handle, GWL_EXSTYLE);
+    exstyle |= 0x00040000; // WS_EX_APPWINDOW - appear in taskbar
+    exstyle |= 0x00000010; // WS_EX_ACCEPTFILES - idk what this does but sounds ok
+    SetWindowLongPtrW(handle, GWL_EXSTYLE, exstyle);
+
+    let mut style = GetWindowLongPtrW(handle, GWL_STYLE);
+    style |= 0x00080000; // WS_SYSMENU - adds system menu to taskbar, alt+space etc
+    // (winamp has a custom menu there.. i wonder how to do that)
+    style |= 0x00020000; // WS_MINIMIZEBOX - allow minimizing
+    style |= 0x00800000; // WS_BORDER - adds nice 2px border (it did one time and now it doesn't..)
+    SetWindowLongPtrW(handle, GWL_STYLE, style);
+
     ShowWindow(handle, SW_SHOW);
 }
