@@ -124,11 +124,6 @@ pub struct ConnectionActor {
 
     state: Arc<RwLock<State>>,
 
-    // we only need to use this once, when we first connect
-    // if we see the start message -> we are in sync
-    // if we see a frame without start message -> we need to catch up first
-    is_synced: bool,
-
     ui: UIThreadHandle,
 
     transmit: TransmitThreadHandle,
@@ -221,11 +216,7 @@ impl ConnectionActor {
         let tcp_stream = TcpStream::connect(addr.clone()).await?;
         let stream = FrameStream::new(tcp_stream);
 
-        state.write().await.connection = Some(ConnectionState {
-            addr,
-            room: None,
-            buffering: false,
-        });
+        state.write().await.connection = Some(ConnectionState { addr, room: None });
 
         Ok(ConnectionActor {
             state,
@@ -233,8 +224,6 @@ impl ConnectionActor {
             stream,
             next_id: 0,
             pending: HashMap::new(),
-
-            is_synced: false,
 
             ui,
 
@@ -321,7 +310,7 @@ impl ConnectionActor {
                         }
                         AudioStatus::Buffering(is_buffering) => {
                             let mut s = self.state.write().await;
-                            s.connection.as_mut().unwrap().buffering = is_buffering;
+                            s.connection.as_mut().unwrap().room.as_mut().unwrap().buffering = is_buffering;
 
                             self.ui.update(UIUpdateEvent::Status);
                         }
@@ -365,9 +354,28 @@ impl ConnectionActor {
             Message::AudioData(data) => {
                 match data {
                     protocol::AudioData::Frame(f) => {
-                        if !self.is_synced {
+                        let state = self.state.read().await;
+                        let room = state.connection.as_ref().unwrap().room.as_ref().unwrap();
+
+                        if !room.is_synced {
+                            // lol
+                            drop(state);
+
                             // we're late.... try and catch up will you
-                            self.is_synced = true;
+                            let mut state_write = self.state.write().await;
+                            let room_write = state_write
+                                .connection
+                                .as_mut()
+                                .unwrap()
+                        {
+                            let mut state = self.state.write().await;
+                            let room = state.connection.as_mut().unwrap().room.as_mut().unwrap();
+                            room.is_synced = true;
+                        }
+                                .as_mut()
+                                .unwrap();
+                            room_write.is_synced = true;
+
                             self.audio
                                 .send(AudioCommand::StartLate(f.frame as usize))
                                 .unwrap();
@@ -441,6 +449,8 @@ impl ConnectionActor {
                             playing: None,
                             queue: VecDeque::new(),
                             connected_users: HashMap::new(),
+                            is_synced: false,
+                            buffering: false,
                         })
                     }
                     None => {

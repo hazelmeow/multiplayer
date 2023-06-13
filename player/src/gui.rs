@@ -456,11 +456,11 @@ impl UIThread {
                 return format!("Loading {} files...", state.loading_count);
             }
 
-            if connection.buffering {
-                return format!("Buffering...");
-            }
-
             if let Some(r) = &connection.room {
+                if r.buffering {
+                    return format!("Buffering...");
+                }
+
                 if let Some(t) = &r.playing {
                     if t.owner == state.my_id {
                         return "Playing (transmitting)".to_string();

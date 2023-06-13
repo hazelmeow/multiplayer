@@ -54,14 +54,18 @@ pub struct State {
 pub struct ConnectionState {
     addr: String,
     room: Option<RoomState>,
-
-    // TODO (in a long long time): transmit and audio should belong to the room not the connection........maybe
-    buffering: bool,
 }
 
 pub struct RoomState {
     id: u32,
     name: String,
+
+    // we only need to use this once, when we first connect
+    // if we see the start message -> we are in sync
+    // if we see a frame without start message -> we need to catch up first
+    is_synced: bool,
+
+    buffering: bool,
 
     playing: Option<Track>,
     queue: VecDeque<Track>,
