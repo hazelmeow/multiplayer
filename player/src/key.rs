@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::PathBuf;
 use std::{error::Error, fs};
 
 use aes_gcm_siv::{
@@ -6,21 +6,22 @@ use aes_gcm_siv::{
     Aes256GcmSiv, Nonce,
 };
 
+use crate::preferences;
+
 pub struct Key {
     cipher: Aes256GcmSiv,
 }
 
 impl Key {
     pub fn load() -> Result<Self, Box<dyn Error>> {
-        // TODO: this probably shouldnt always be relative to the binary??
-        let key_path = Path::new("./.key");
+        let key_path = preferences::make_path("key.key");
 
         let cipher = Self::load_key(key_path)?;
 
         Ok(Key { cipher })
     }
 
-    fn load_key(key_path: &Path) -> Result<Aes256GcmSiv, Box<dyn Error>> {
+    fn load_key(key_path: PathBuf) -> Result<Aes256GcmSiv, Box<dyn Error>> {
         if key_path.exists() {
             let key = fs::read_to_string(key_path)?;
             let key: Vec<u8> = hex::decode(key.as_bytes())?;

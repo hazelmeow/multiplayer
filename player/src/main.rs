@@ -5,6 +5,7 @@ use connection::{ConnectionActor, ConnectionActorHandle};
 use futures::future::join_all;
 use gui::UIThreadHandle;
 use key::Key;
+use preferences::Preferences;
 use tokio::sync::RwLock;
 
 mod connection;
@@ -40,6 +41,10 @@ async fn main() -> std::io::Result<()> {
     // t.connect().await; // temporary
     t.run().await;
 
+    let p = &mut t.state.write().await.preferences;
+    p.volume = t.volume;
+    p.save().await;
+
     println!("exiting");
 
     Ok(())
@@ -48,6 +53,8 @@ async fn main() -> std::io::Result<()> {
 pub struct State {
     my_id: String,
     key: Key,
+
+    preferences: Preferences,
 
     connection: Option<ConnectionState>,
 
@@ -131,14 +138,20 @@ impl MainThread {
     async fn setup(my_id: String) -> Self {
         let key = Key::load().expect("failed to load key");
 
+        let prefs = Preferences::load().await;
+        let volume = prefs.volume;
+
         let state = Arc::new(RwLock::new(State {
             my_id,
             key,
+            preferences: prefs,
             loading_count: 0,
             connection: None,
         }));
 
-        let (ui, ui_rx) = UIThread::spawn(state.clone());
+        let (mut ui, ui_rx) = UIThread::spawn(state.clone());
+
+        ui.update(UIUpdateEvent::Volume(volume));
 
         MainThread {
             state,
@@ -148,7 +161,7 @@ impl MainThread {
             ui,
             ui_rx,
 
-            volume: 0.5,
+            volume,
         }
     }
 
@@ -197,6 +210,10 @@ impl MainThread {
                                 Server {
                                     name: "example.com".into(),
                                     addr: "example.com:443".into(),
+                                },
+                                Server {
+                                    name: "nya~~".into(),
+                                    addr: "nya.natu.moe:8080".into(),
                                 },
                             ];
 

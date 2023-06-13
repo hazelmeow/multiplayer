@@ -167,8 +167,6 @@ impl UIThread {
 
         // blehhhh this is all such a mess
         gui.volume_slider.set_value(0.5);
-        // TODO: we should load the initial value from stored preferences or something
-        tx.send(UIEvent::VolumeSlider(0.5)).unwrap();
 
         gui.lbl_title.set_text(&"hi, welcome >.<".to_string());
 
