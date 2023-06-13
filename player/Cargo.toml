@@ -20,7 +20,7 @@ fltk-theme = "0.7.0"
 aes-gcm-siv = "0.11.1"
 hex = "0.4.3"
 spectrum-analyzer = "1.4.0"
-image = "0.24.6"
+image = { version = "0.24.6", default-features = false, features = ["jpeg", "png", "tiff"] }
 bytes = "1.4.0"
 
 [target.'cfg(windows)'.dependencies]
