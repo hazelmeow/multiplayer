@@ -35,15 +35,23 @@ async fn maybe_connection_exited(maybe_actor: &Option<ConnectionActorHandle>) ->
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let my_id = args[1].clone();
+    let is_temp = match args.get(1).map(|s| s.as_str()) {
+        Some("-t") => true, // use temporary identity for testing
+        _ => false, // len is 1 but index is 1 :3
+    };
 
-    let mut t = MainThread::setup(my_id).await;
+    let mut t = MainThread::setup(is_temp).await;
     // t.connect().await; // temporary
     t.run().await;
 
-    let p = &mut t.state.write().await.preferences;
-    p.volume = t.volume;
-    p.save().await;
+    if !is_temp {
+        let p = &mut t.state.write().await.preferences;
+        p.volume = t.volume;
+        p.save().await;
+    } else {
+        // don't bother saving.. delete even
+        std::fs::remove_file(t.state.read().await.preferences.path())?;
+    }
 
     println!("exiting");
 
@@ -135,11 +143,16 @@ struct MainThread {
 }
 
 impl MainThread {
-    async fn setup(my_id: String) -> Self {
+    async fn setup(is_temp: bool) -> Self {
         let key = Key::load().expect("failed to load key");
 
-        let prefs = Preferences::load().await;
+        let prefs = if !is_temp {
+            Preferences::load().await
+        } else {
+            Preferences::default()
+        };
         let volume = prefs.volume;
+        let my_id = prefs.id();
 
         let state = Arc::new(RwLock::new(State {
             my_id,
@@ -213,7 +226,7 @@ impl MainThread {
                                 },
                                 Server {
                                     name: "nya~~".into(),
-                                    addr: "nya.natu.moe:8080".into(),
+                                    addr: "nya.natu.moe:8080".into(), // OOPS
                                 },
                             ];
 
@@ -345,6 +358,13 @@ impl MainThread {
                             self.volume = (self.volume - 0.02).max(0.);
                             self.ui.update(UIUpdateEvent::Volume(self.volume));
                             self.try_update_volume();
+                        }
+                        UIEvent::SavePreferences{name} => {
+                            let mut s = self.state.write().await;
+                            s.preferences.name = name;
+
+                            s.preferences.volume = self.volume;
+                            s.preferences.save().await;
                         }
                         UIEvent::Quit => break,
                         _ => {}

@@ -191,7 +191,7 @@ impl ConnectionActor {
 
             // handshake okay, send authentication
             let result = handle
-                .authenticate(s.my_id.clone(), s.my_id.clone().repeat(5))
+                .authenticate(s.my_id.clone(), s.preferences.name.clone())
                 .await?;
             if !result {
                 return Err("failed to authenticate somehow".into());

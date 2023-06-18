@@ -18,18 +18,22 @@ use tokio::sync::RwLock;
 
 use protocol::TrackArt;
 
-pub mod bitrate_bar;
-pub mod connection_window;
 pub mod main_window;
-pub mod marquee_label;
 pub mod queue_window;
+pub mod connection_window;
+pub mod preferences_window;
+
+pub mod bitrate_bar;
+pub mod marquee_label;
 pub mod visualizer;
+pub mod group_box;
 
 use crate::preferences::Server;
 use crate::State;
 
 use self::connection_window::ConnectionWindow;
 use self::main_window::*;
+use self::preferences_window::PrefsWindow;
 use self::queue_window::QueueWindow;
 
 // only temporary
@@ -52,6 +56,11 @@ pub enum UIEvent {
     Pause,
     HideQueue,
     HideConnectionWindow,
+    HidePrefsWindow,
+    PleaseSavePreferencesWithThisData,
+    SavePreferences{
+        name: String
+    },
     Quit,
 
     Update(UIUpdateEvent),
@@ -115,6 +124,7 @@ pub struct UIThread {
     gui: MainWindow,
     queue_gui: QueueWindow,
     connection_gui: ConnectionWindow,
+    prefs_gui: PrefsWindow,
 }
 
 impl UIThread {
@@ -151,8 +161,11 @@ impl UIThread {
         theme.apply();
 
         let mut gui = MainWindow::make_window(sender.clone());
-        let mut queue_gui = QueueWindow::make_window(sender.clone());
-        let mut connection_gui = ConnectionWindow::make_window(sender.clone(), state.clone());
+        let queue_gui = QueueWindow::make_window(sender.clone());
+        let connection_gui = ConnectionWindow::make_window(sender.clone(), state.clone());
+        let mut prefs_gui = PrefsWindow::make_window(sender.clone());
+        prefs_gui.main_win.show();
+        prefs_gui.load_state(&*state.blocking_read().preferences);
 
         // stuff for cool custom titlebars
         gui.main_win.set_border(false);
@@ -181,26 +194,33 @@ impl UIThread {
             gui,
             queue_gui,
             connection_gui,
+            prefs_gui
         }
     }
 
     fn run(&mut self) {
-        let mut drag_state_main = DragState::default();
+        let mut ds = DragState::default();
         let sender1 = self.sender.clone();
         self.gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut drag_state_main, sender1.clone(), w, ev)
+            Self::handle_window_event(&mut ds, sender1.clone(), w, ev)
         });
 
-        let mut drag_state_queue = DragState::default();
+        let mut ds = DragState::default();
         let sender2 = self.sender.clone();
         self.queue_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut drag_state_queue, sender2.clone(), w, ev)
+            Self::handle_window_event(&mut ds, sender2.clone(), w, ev)
         });
 
-        let mut drag_state_queue = DragState::default();
+        let mut ds = DragState::default();
         let sender2 = self.sender.clone();
         self.connection_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut drag_state_queue, sender2.clone(), w, ev)
+            Self::handle_window_event(&mut ds, sender2.clone(), w, ev)
+        });
+
+        let mut ds = DragState::default();
+        let sender2 = self.sender.clone();
+        self.prefs_gui.main_win.handle(move |w, ev| {
+            Self::handle_window_event(&mut ds, sender2.clone(), w, ev)
         });
 
         while self.app.wait() {
@@ -268,6 +288,12 @@ impl UIThread {
                     }
                     UIEvent::HideConnectionWindow => {
                         self.connection_gui.main_win.hide();
+                    }
+                    UIEvent::HidePrefsWindow => {
+                        self.prefs_gui.main_win.hide();
+                    }
+                    UIEvent::PleaseSavePreferencesWithThisData => {
+                        self.sender.send(UIEvent::SavePreferences { name: self.prefs_gui.fld_name.value()});
                     }
                     UIEvent::Quit => break,
                     _ => {}

@@ -7,6 +7,7 @@ use std::{
 
 use platform_dirs::AppDirs;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Server {
@@ -17,6 +18,8 @@ pub struct Server {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesData {
     pub volume: f32,
+    pub name: String,
+    id: String,
 
     pub servers: Vec<(String, String)>,
 }
@@ -25,6 +28,9 @@ impl Default for PreferencesData {
     fn default() -> Self {
         Self {
             volume: 0.5,
+            name: "anon".into(),
+            id: Uuid::new_v4().to_string(),
+            
             servers: Vec::new(),
         }
     }
@@ -48,6 +54,24 @@ impl Deref for Preferences {
 impl DerefMut for Preferences {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.inner
+    }
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Preferences {
+            inner: PreferencesData::default(),
+            path: PathBuf::from("./preferences.tmp.json")
+        }
+    }
+}
+
+impl Preferences {
+    pub fn id(&self) -> String {
+        self.inner.id.clone()
+    }
+    pub fn path(&self) -> PathBuf {
+        self.path.clone()
     }
 }
 
