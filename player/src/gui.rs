@@ -27,12 +27,14 @@ pub mod bitrate_bar;
 pub mod marquee_label;
 pub mod visualizer;
 pub mod group_box;
+pub mod play_status;
 
 use crate::preferences::Server;
 use crate::State;
 
 use self::connection_window::ConnectionWindow;
 use self::main_window::*;
+use self::play_status::PlayStatusIcon;
 use self::preferences_window::PrefsWindow;
 use self::queue_window::QueueWindow;
 
@@ -474,7 +476,30 @@ impl UIThread {
     fn update_status(&mut self) {
         let status = self.get_status();
         self.gui.status_field.set_label(&status);
+        // and the little thingy too
+        let play_status = self.get_play_status();
+        self.gui.play_status.update(play_status);
     }
+
+    fn get_play_status(&self) -> PlayStatusIcon {
+        // i love duplicated logic ^-^
+        let state = self.state.blocking_read();
+
+        if let Some(connection) = &state.connection {
+            if let Some(r) = &connection.room {
+                if let Some(t) = &r.playing {
+                    if t.owner == state.my_id {
+                        // todo: pause?
+                        return PlayStatusIcon::PlayTx
+                    } else {
+                        return PlayStatusIcon::PlayRx
+                    }
+                }
+            }
+        }
+        PlayStatusIcon::Stop
+    }
+
     fn get_status(&self) -> String {
         let state = self.state.blocking_read();
 

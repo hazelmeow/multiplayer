@@ -12,6 +12,7 @@ use fltk::window::*;
 use super::bitrate_bar::*;
 use super::marquee_label::*;
 use super::visualizer::*;
+use super::play_status::*;
 
 use super::add_bar;
 use super::UIEvent;
@@ -27,6 +28,7 @@ pub struct MainWindow {
     pub lbl_artist: Frame,
     pub visualizer: Visualizer,
     pub bitrate_bar: BitrateBar,
+    pub play_status: PlayStatus,
     pub volume_slider: HorSlider,
     pub art_frame: Frame,
 }
@@ -159,6 +161,9 @@ impl MainWindow {
         let bitrate_bar = BitrateBar::new(67, 69);
         display.add(&*bitrate_bar);
 
+        let play_status = PlayStatus::new(18, 38);
+        display.add(&*play_status);
+
         display.end();
         main_win.add(&display);
 
@@ -198,6 +203,7 @@ impl MainWindow {
             lbl_artist,
             visualizer,
             bitrate_bar,
+            play_status,
             volume_slider,
             art_frame,
         }
