@@ -18,16 +18,16 @@ use tokio::sync::RwLock;
 
 use protocol::TrackArt;
 
-pub mod main_window;
-pub mod queue_window;
 pub mod connection_window;
+pub mod main_window;
 pub mod preferences_window;
+pub mod queue_window;
 
 pub mod bitrate_bar;
-pub mod marquee_label;
-pub mod visualizer;
 pub mod group_box;
+pub mod marquee_label;
 pub mod play_status;
+pub mod visualizer;
 
 use crate::preferences::Server;
 use crate::State;
@@ -60,9 +60,7 @@ pub enum UIEvent {
     HideConnectionWindow,
     HidePrefsWindow,
     PleaseSavePreferencesWithThisData,
-    SavePreferences{
-        name: String
-    },
+    SavePreferences { name: String },
     Quit,
 
     Update(UIUpdateEvent),
@@ -196,34 +194,34 @@ impl UIThread {
             gui,
             queue_gui,
             connection_gui,
-            prefs_gui
+            prefs_gui,
         }
     }
 
     fn run(&mut self) {
         let mut ds = DragState::default();
         let sender1 = self.sender.clone();
-        self.gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, sender1.clone(), w, ev)
-        });
+        self.gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, sender1.clone(), w, ev));
 
         let mut ds = DragState::default();
         let sender2 = self.sender.clone();
-        self.queue_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, sender2.clone(), w, ev)
-        });
+        self.queue_gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, sender2.clone(), w, ev));
 
         let mut ds = DragState::default();
         let sender2 = self.sender.clone();
-        self.connection_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, sender2.clone(), w, ev)
-        });
+        self.connection_gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, sender2.clone(), w, ev));
 
         let mut ds = DragState::default();
         let sender2 = self.sender.clone();
-        self.prefs_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, sender2.clone(), w, ev)
-        });
+        self.prefs_gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, sender2.clone(), w, ev));
 
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
@@ -295,7 +293,9 @@ impl UIThread {
                         self.prefs_gui.main_win.hide();
                     }
                     UIEvent::PleaseSavePreferencesWithThisData => {
-                        self.sender.send(UIEvent::SavePreferences { name: self.prefs_gui.fld_name.value()});
+                        self.sender.send(UIEvent::SavePreferences {
+                            name: self.prefs_gui.fld_name.value(),
+                        });
                     }
                     UIEvent::Quit => break,
                     _ => {}
@@ -370,9 +370,11 @@ impl UIThread {
                     if let Some(r) = &c.room {
                         // TODO: metadata stuff here is TOO LONG AND ANNOYING
                         if let Some(track) = &r.playing {
+                            let name = r.connected_users.get(&track.owner);
+
                             let line = format!(
                                 "@b{}\t[{}] {}",
-                                track.owner,
+                                name.unwrap_or(&"?".into()),
                                 min_secs(track.metadata.duration as usize),
                                 track
                                     .metadata
@@ -418,9 +420,11 @@ impl UIThread {
                             }
                         }
                         for track in &r.queue {
+                            let name = r.connected_users.get(&track.owner);
+
                             let line = format!(
                                 "{}\t[{}] {}",
-                                track.owner,
+                                name.unwrap_or(&"?".into()),
                                 min_secs(track.metadata.duration as usize),
                                 track
                                     .metadata
@@ -490,9 +494,9 @@ impl UIThread {
                 if let Some(t) = &r.playing {
                     if t.owner == state.my_id {
                         // todo: pause?
-                        return PlayStatusIcon::PlayTx
+                        return PlayStatusIcon::PlayTx;
                     } else {
-                        return PlayStatusIcon::PlayRx
+                        return PlayStatusIcon::PlayRx;
                     }
                 }
             }
@@ -519,7 +523,11 @@ impl UIThread {
                     if t.owner == state.my_id {
                         return "Playing (transmitting)".to_string();
                     } else {
-                        return format!("Playing (receiving from {:?})", t.owner);
+                        let name = r.connected_users.get(&t.owner);
+                        return format!(
+                            "Playing (receiving from {})",
+                            name.unwrap_or(&"?".to_string())
+                        );
                     }
                 } else {
                     return format!("Connected to {}/{}", connection.server.addr, r.name);
