@@ -65,8 +65,28 @@ impl AudioInfoReader {
 
     pub fn read_info(&mut self) -> Result<(u32, usize, TrackMetadata), Box<dyn Error>> {
         // read 1 packet to check the sample rate and channel count
-        let packet = self.probe_result.format.next_packet()?;
-        let decoded = self.decoder.decode(&packet)?;
+
+        let decoded = loop {
+            let p = self.probe_result.format.next_packet();
+            match p {
+                Ok(packet) => {
+                    match self.decoder.decode(&packet) {
+                        Ok(decoded) => break decoded,
+                        Err(_) => {
+                            // failed to decode, keep trying
+                            continue;
+                        }
+                    }
+                }
+                Err(SymphoniaError::IoError(_)) => {
+                    // out of packets
+                    return Err("couldn't read any packets so we gave up :/".into());
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
+        };
         let spec = *decoded.spec();
 
         let duration = self
@@ -233,7 +253,7 @@ impl AudioReader {
     fn read_more(&mut self) -> Result<(), Box<dyn Error>> {
         match self.inner.probe_result.format.next_packet() {
             Ok(packet) => {
-                let decoded = self.inner.decoder.decode(&packet).unwrap();
+                let decoded = self.inner.decoder.decode(&packet)?;
                 let spec = *decoded.spec();
 
                 if decoded.frames() > 0 {
@@ -314,9 +334,15 @@ impl AudioReader {
 
         let mut pcm = [0.0; PCM_LENGTH];
 
-        let resampled = self.resample_more().unwrap();
-        for i in 0..PCM_LENGTH {
-            pcm[i] = resampled[i];
+        match self.resample_more() {
+            Ok(resampled) => {
+                for i in 0..PCM_LENGTH {
+                    pcm[i] = resampled[i];
+                }
+            }
+            Err(e) => {
+                println!("failed to encode frame: {:?}", e);
+            }
         }
 
         let x = self.encoder.encode_vec_float(&pcm, 256).unwrap();
