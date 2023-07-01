@@ -53,7 +53,7 @@ async fn main() -> std::io::Result<()> {
         std::fs::remove_file(t.state.read().await.preferences.path())?;
     }
 
-    println!("exiting");
+    println!("exited gracefully");
 
     Ok(())
 }
@@ -186,6 +186,11 @@ impl MainThread {
 
         loop {
             tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    println!("handling ctrl+c");
+                    break;
+                }
+
                 // watch for connection exits
                 Some(()) = maybe_connection_exited(&self.connection) => {
                     self.disconnect().await;
