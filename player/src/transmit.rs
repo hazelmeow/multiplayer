@@ -335,7 +335,13 @@ impl AudioReader {
         // now we have to interleave it since we had to use the resampling thing
         let samples: Vec<f32> = samples_correct_rate[0]
             .chunks(1)
-            .zip(samples_correct_rate[1].chunks(1))
+            .zip({
+                if self.channel_count == 1 {
+                    samples_correct_rate[0].chunks(1)
+                } else {
+                    samples_correct_rate[1].chunks(1)
+                }
+            })
             .flat_map(|(a, b)| a.into_iter().chain(b))
             .copied()
             .collect();
