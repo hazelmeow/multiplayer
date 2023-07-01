@@ -17,21 +17,40 @@ pub struct Server {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesData {
+    #[serde(default = "default_volume")]
     pub volume: f32,
+    #[serde(default = "default_name")]
     pub name: String,
+    #[serde(default = "generate_id")]
     id: String,
 
-    pub servers: Vec<(String, String)>,
+    #[serde(default = "default_servers")]
+    pub servers: Vec<Server>,
+}
+
+const fn default_volume() -> f32 {
+    0.5
+}
+fn default_name() -> String {
+    "anon".into()
+}
+fn generate_id() -> String {
+    Uuid::new_v4().to_string()
+}
+fn default_servers() -> Vec<Server> {
+    vec![Server {
+        name: "local".into(),
+        addr: "127.0.0.1:8080".into(),
+    }]
 }
 
 impl Default for PreferencesData {
     fn default() -> Self {
         Self {
-            volume: 0.5,
-            name: "anon".into(),
-            id: Uuid::new_v4().to_string(),
-            
-            servers: Vec::new(),
+            volume: default_volume(),
+            name: default_name(),
+            id: generate_id(),
+            servers: default_servers(),
         }
     }
 }
@@ -61,7 +80,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Preferences {
             inner: PreferencesData::default(),
-            path: PathBuf::from("./preferences.tmp.json")
+            path: PathBuf::from("./preferences.tmp.json"),
         }
     }
 }

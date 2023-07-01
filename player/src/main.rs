@@ -215,24 +215,12 @@ impl MainThread {
                         }
 
                         UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh) => {
-                            let servers_tmp = vec![
-                                Server {
-                                    name: "local".into(),
-                                    addr: "127.0.0.1:8080".into(),
-                                },
-                                Server {
-                                    name: "example.com".into(),
-                                    addr: "example.com:443".into(),
-                                },
-                                Server {
-                                    name: "nya~~".into(),
-                                    addr: "nya.natu.moe:8080".into(), // OOPS
-                                },
-                            ];
+                            let state = self.state.read().await;
+                            let servers = state.preferences.servers.clone();
 
-                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers_tmp.iter().map(|s| ServerStatus::from(s.clone())).collect()));
+                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers.iter().map(|s| ServerStatus::from(s.clone())).collect()));
 
-                            for server in servers_tmp {
+                            for server in servers {
                                 let mut ui2 = self.ui.clone();
                                 tokio::spawn(async move {
                                     let s = connection::query_server(server).await;
