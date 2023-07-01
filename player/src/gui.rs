@@ -607,6 +607,16 @@ impl UIThread {
                     _ => false,
                 }
             }
+            fltk::enums::Event::Shortcut => {
+                let key = app::event_key();
+
+                if key == Key::Escape {
+                    // don't close the program (mark the event as handled)
+                    true
+                } else {
+                    false
+                }
+            }
             _ => false,
         }
     }
