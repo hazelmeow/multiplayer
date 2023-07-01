@@ -62,6 +62,8 @@ pub enum Message {
     AudioData(AudioData),
     Text(String),
 
+    Heartbeat,
+
     Notification(Notification),
 
     Request { request_id: u32, data: Request },

@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use tokio::io;
@@ -163,6 +164,7 @@ struct PeerHandle {
 struct Peer {
     id: String,
     room_id: Option<u32>,
+    last_heartbeat: Instant,
     addr: SocketAddr,
     stream: FrameStream,
     rx: Rx, // mpsc channel used to receive messages from peers
@@ -189,6 +191,7 @@ impl Peer {
         Ok(Peer {
             id,
             room_id: None,
+            last_heartbeat: Instant::now(),
             addr,
             stream,
             rx,
@@ -277,10 +280,19 @@ async fn handle_handshaken_connection(
                     return handle_authenticated_connection(state, stream, id, name).await;
                 }
 
-                _ => return Err("not allowed".into()),
+                _ => {
+                    println!("not allowed request was {:?}", request);
+                    return Err("not allowed".into());
+                }
             },
 
-            _ => return Err("not allowed".into()),
+            // sure
+            Message::Heartbeat => {}
+
+            _ => {
+                println!("not allowed message was {:?}", msg);
+                return Err("not allowed".into());
+            }
         }
     }
 
@@ -362,6 +374,8 @@ async fn handle_authenticated_connection(
     // create a new Peer
     let mut peer = Peer::new(state.clone(), stream, id, name).await?;
 
+    let mut heartbeat_check_interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+
     // process incoming messages until disconnected
     loop {
         tokio::select! {
@@ -387,6 +401,14 @@ async fn handle_authenticated_connection(
                 // socket disconnected
                 None => break
             },
+
+            // if we haven't received a heartbeat in the last 2 minutes, disconnect them
+            _ = heartbeat_check_interval.tick() => {
+                let elapsed = peer.last_heartbeat.elapsed();
+                if elapsed > Duration::from_secs(120) {
+                    break
+                }
+            }
         }
     }
 
@@ -484,6 +506,11 @@ async fn handle_message(
             // resend this message to all other peers
             room.broadcast_others(&peer, &m).await;
 
+            Ok(())
+        }
+
+        Message::Heartbeat => {
+            peer.last_heartbeat = Instant::now();
             Ok(())
         }
 

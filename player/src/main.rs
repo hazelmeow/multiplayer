@@ -37,7 +37,7 @@ async fn main() -> std::io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let is_temp = match args.get(1).map(|s| s.as_str()) {
         Some("-t") => true, // use temporary identity for testing
-        _ => false, // len is 1 but index is 1 :3
+        _ => false,         // len is 1 but index is 1 :3
     };
 
     let mut t = MainThread::setup(is_temp).await;

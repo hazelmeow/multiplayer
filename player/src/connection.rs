@@ -235,6 +235,8 @@ impl ConnectionActor {
     }
 
     async fn run(&mut self) {
+        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+
         loop {
             tokio::select! {
                 // received a command with a message to send to the server
@@ -323,6 +325,11 @@ impl ConnectionActor {
                         }
                     }
                 },
+
+                // time to send a heartbeat
+                _ = heartbeat_interval.tick() => {
+                    self.stream.send(&Message::Heartbeat).await.unwrap();
+                },
             }
         }
 
@@ -399,6 +406,7 @@ impl ConnectionActor {
             Message::RefreshRoomList => println!("unexpected message: {:?}", message),
             Message::Text(_) => println!("unexpected message: {:?}", message),
             Message::Request { .. } => println!("unexpected message: {:?}", message),
+            Message::Heartbeat => println!("unexpected message: {:?}", message),
         }
     }
 
