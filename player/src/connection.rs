@@ -416,7 +416,7 @@ impl ConnectionActor {
 
         match notification {
             Notification::Queue(queue) => {
-                println!("got queue: {:?}", queue);
+                // println!("got queue: {:?}", queue);
 
                 let mut room = conn.room.as_mut().expect("lol");
                 room.queue = queue;
@@ -425,7 +425,7 @@ impl ConnectionActor {
                 self.ui.update(UIUpdateEvent::Status);
             }
             Notification::Playing(playing) => {
-                println!("got playing: {:?}", playing);
+                // println!("got playing: {:?}", playing);
 
                 let mut room = conn.room.as_mut().expect("lol");
                 room.playing = playing.clone();
