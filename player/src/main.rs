@@ -266,12 +266,12 @@ impl MainThread {
                                 paths
                                     .into_iter()
                                     .map(|p| {
-                                        let file = p.into_os_string().into_string().unwrap();
-                                        let encrypted_path = s.key.encrypt_path(&file).unwrap();
+                                        let file_string = p.as_os_str().to_string_lossy();
+                                        let encrypted_path = s.key.encrypt_path(&file_string.to_string()).unwrap();
                                         let my_id = s.my_id.clone();
 
                                         tokio::spawn(async move {
-                                            match AudioInfoReader::load(&file) {
+                                            match AudioInfoReader::load(&p) {
                                                 Ok(mut reader) => {
                                                     match reader.read_info() {
                                                         Ok((_, _, metadata)) => {
@@ -283,13 +283,13 @@ impl MainThread {
                                                             Some(track)
                                                         }
                                                         Err(e) => {
-                                                            println!("errored reading metadata for {file}: {e}");
+                                                            println!("errored reading metadata for {:?}: {e}", p);
                                                             None
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    println!("errored loading {file}: {e}");
+                                                    println!("errored loading {:?}: {e}", p);
                                                     None
                                                 }
                                             }

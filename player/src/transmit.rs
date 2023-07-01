@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::error::Error;
 use std::io::Cursor;
+use std::path::PathBuf;
 
 use image::imageops::FilterType;
 use opus::Encoder;
@@ -24,10 +25,17 @@ use crate::AudioCommand;
 pub struct AudioInfoReader {
     probe_result: ProbeResult,
     decoder: Box<dyn Decoder>,
+    filename: String,
 }
 
 impl AudioInfoReader {
-    pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn load(path: &PathBuf) -> Result<Self, Box<dyn Error>> {
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_os_string()
+            .into_string()
+            .unwrap_or_default();
         let src = std::fs::File::open(path)?;
 
         let mss = MediaSourceStream::new(Box::new(src), Default::default());
@@ -60,6 +68,7 @@ impl AudioInfoReader {
         Ok(AudioInfoReader {
             probe_result,
             decoder,
+            filename,
         })
     }
 
@@ -117,13 +126,13 @@ impl AudioInfoReader {
             let tags = rev.tags();
             let visuals = rev.visuals();
 
-            Self::fill_metadata(&mut track_md, tags, visuals);
+            Self::fill_metadata(&mut track_md, tags, visuals, &self.filename);
         } else if let Some(mut md) = self.probe_result.metadata.get() {
             let rev = md.skip_to_latest().unwrap();
             let tags = rev.tags();
             let visuals = rev.visuals();
 
-            Self::fill_metadata(&mut track_md, tags, visuals);
+            Self::fill_metadata(&mut track_md, tags, visuals, &self.filename);
         } else {
             println!("really no metadata to speak of...");
         }
@@ -135,6 +144,7 @@ impl AudioInfoReader {
         md: &mut TrackMetadata,
         tags: &[symphonia::core::meta::Tag],
         visuals: &[symphonia::core::meta::Visual],
+        filename: &String,
     ) {
         for tag in tags {
             match tag.std_key {
@@ -163,6 +173,10 @@ impl AudioInfoReader {
             if let Some(artist) = &md.artist {
                 md.album_artist = Some(artist.clone());
             }
+        }
+
+        if md.title.is_none() {
+            md.title = Some(filename.clone());
         }
 
         // just assume there's only one visual in the file?
@@ -206,7 +220,7 @@ pub struct AudioReader {
 }
 
 impl AudioReader {
-    pub fn load(path: &str) -> Result<Self, Box<dyn Error>> {
+    pub fn load(path: &PathBuf) -> Result<Self, Box<dyn Error>> {
         let mut info_reader = AudioInfoReader::load(path)?;
 
         let (sample_rate, channel_count, _) = info_reader.read_info()?;
@@ -365,7 +379,7 @@ impl AudioReader {
 
 #[derive(Debug, Clone)]
 pub enum TransmitCommand {
-    Start(String),
+    Start(PathBuf),
     Stop,
     Shutdown,
 }
@@ -472,7 +486,7 @@ impl TransmitThread {
                         self.send_both(AudioData::Start);
                     }
                     Err(e) => {
-                        println!("failed to load {path} while transmitting: {e}")
+                        println!("failed to load {:?} while transmitting: {e}", path)
                     }
                 }
             }

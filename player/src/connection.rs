@@ -433,7 +433,9 @@ impl ConnectionActor {
                 if let Some(t) = playing {
                     if t.owner == state.my_id {
                         let path = state.key.decrypt_path(t.path).unwrap();
-                        self.transmit.send(TransmitCommand::Start(path)).unwrap();
+                        self.transmit
+                            .send(TransmitCommand::Start(path.into()))
+                            .unwrap();
                     }
                 }
 
