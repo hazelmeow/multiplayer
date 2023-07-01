@@ -437,11 +437,9 @@ impl UIThread {
                     }
                 }
 
-                self.gui.status_right_display.set_label(&format!(
-                    "U{:0>2} Q{:0>2}",
-                    self.gui.users.size(),
-                    self.queue_gui.queue_browser.size(),
-                ));
+                drop(s);
+
+                self.update_right_status();
             }
             UIUpdateEvent::UpdateConnectionTree(list) => {
                 self.connection_gui.populate(list);
