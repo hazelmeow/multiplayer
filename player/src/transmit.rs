@@ -126,15 +126,19 @@ impl AudioInfoReader {
             let tags = rev.tags();
             let visuals = rev.visuals();
 
-            Self::fill_metadata(&mut track_md, tags, visuals, &self.filename);
+            Self::fill_metadata(&mut track_md, tags, visuals);
         } else if let Some(mut md) = self.probe_result.metadata.get() {
             let rev = md.skip_to_latest().unwrap();
             let tags = rev.tags();
             let visuals = rev.visuals();
 
-            Self::fill_metadata(&mut track_md, tags, visuals, &self.filename);
+            Self::fill_metadata(&mut track_md, tags, visuals);
         } else {
             println!("really no metadata to speak of...");
+        }
+
+        if track_md.title.is_none() {
+            track_md.title = Some(self.filename.clone());
         }
 
         Ok((spec.rate, spec.channels.count(), track_md))
@@ -144,7 +148,6 @@ impl AudioInfoReader {
         md: &mut TrackMetadata,
         tags: &[symphonia::core::meta::Tag],
         visuals: &[symphonia::core::meta::Visual],
-        filename: &String,
     ) {
         for tag in tags {
             match tag.std_key {
@@ -173,10 +176,6 @@ impl AudioInfoReader {
             if let Some(artist) = &md.artist {
                 md.album_artist = Some(artist.clone());
             }
-        }
-
-        if md.title.is_none() {
-            md.title = Some(filename.clone());
         }
 
         // just assume there's only one visual in the file?
