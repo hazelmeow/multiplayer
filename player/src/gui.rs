@@ -397,7 +397,7 @@ impl UIThread {
                             self.gui.lbl_artist.set_label(
                                 track
                                     .metadata
-                                    .album_artist
+                                    .artist
                                     .as_ref()
                                     .unwrap_or(&"[unknown artist]".to_string()),
                             );
