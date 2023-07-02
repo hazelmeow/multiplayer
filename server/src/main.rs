@@ -44,6 +44,7 @@ type Rx = mpsc::UnboundedReceiver<Message>;
 
 type Id = String;
 
+#[derive(Debug)]
 struct Room {
     name: String,
 
@@ -106,6 +107,7 @@ impl Room {
     }
 }
 
+#[derive(Debug)]
 struct Shared {
     next_room: u32,
     rooms: HashMap<u32, Room>,
@@ -157,6 +159,7 @@ impl Shared {
     }
 }
 
+#[derive(Debug)]
 struct PeerHandle {
     tx: Tx,
 }
