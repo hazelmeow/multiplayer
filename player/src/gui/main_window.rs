@@ -254,7 +254,10 @@ unsafe fn shitty_windows_only_hack(w: &mut DoubleWindow) {
     style |= 0x00080000; // WS_SYSMENU - adds system menu to taskbar, alt+space etc
                          // (winamp has a custom menu there.. i wonder how to do that)
     style |= 0x00020000; // WS_MINIMIZEBOX - allow minimizing
-    style |= 0x00800000; // WS_BORDER - adds nice 2px border (it did one time and now it doesn't..)
+
+    // this flag makes the main window not snap perfectly so we cant use it
+    // style |= 0x00800000; // WS_BORDER - adds nice 2px border (it did one time and now it doesn't..)
+
     SetWindowLongPtrW(handle, GWL_STYLE, style);
 
     ShowWindow(handle, SW_SHOW);
