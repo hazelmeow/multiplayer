@@ -420,7 +420,9 @@ impl MainThread {
         drop(state);
 
         self.ui.update(UIUpdateEvent::ConnectionChanged);
-        self.ui.update(UIUpdateEvent::Status);
+        self.ui.update(UIUpdateEvent::UserListChanged);
+        self.ui.update(UIUpdateEvent::QueueChanged);
+        self.ui.update(UIUpdateEvent::Reset);
     }
 }
 

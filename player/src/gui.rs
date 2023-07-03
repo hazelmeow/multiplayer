@@ -69,6 +69,7 @@ pub enum UIEvent {
 
 #[derive(Debug, Clone)]
 pub enum UIUpdateEvent {
+    Reset,
     SetTime(usize, usize),
     UserListChanged,
     RoomChanged,
@@ -180,8 +181,6 @@ impl UIThread {
 
         // blehhhh this is all such a mess
         gui.volume_slider.set_value(0.5);
-
-        gui.lbl_title.set_text(&"hi, welcome >.<".to_string());
 
         UIThread {
             app,
@@ -306,6 +305,12 @@ impl UIThread {
 
     fn handle_update(&mut self, evt: UIUpdateEvent) {
         match evt {
+            UIUpdateEvent::Reset => {
+                self.gui.reset();
+
+                self.update_status();
+                self.update_right_status();
+            }
             UIUpdateEvent::SetTime(elapsed, total) => {
                 // TODO: switch between elapsed and remaining on there
                 self.gui.lbl_time.set_label(&min_secs(elapsed));

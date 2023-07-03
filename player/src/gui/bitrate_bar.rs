@@ -84,4 +84,7 @@ impl BitrateBar {
         self.buffer_level.replace(level);
         self.redraw();
     }
+    pub fn reset(&mut self) {
+        self.update_buffer_level(0);
+    }
 }

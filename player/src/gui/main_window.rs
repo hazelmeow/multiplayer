@@ -11,8 +11,8 @@ use fltk::window::*;
 
 use super::bitrate_bar::*;
 use super::marquee_label::*;
-use super::visualizer::*;
 use super::play_status::*;
+use super::visualizer::*;
 
 use super::add_bar;
 use super::UIEvent;
@@ -116,7 +116,7 @@ impl MainWindow {
             status_field.y(),
             status_field.width() - 4,
             status_field.height(),
-            "U.. Q..",
+            "U00 Q00",
         );
         status_right_display.set_label_size(10);
         status_right_display.set_frame(FrameType::NoBox);
@@ -150,12 +150,10 @@ impl MainWindow {
         display.add(&lbl_artist);
 
         let mut lbl_time = Frame::new(29, 35, 80, 16, "00:00");
-        //lbl_time.set_label_font(Font::Courier);
         lbl_time.set_align(Align::Left | Align::Inside);
-        //main_win.add(&lbl_time);
+        display.add(&lbl_time);
 
         let visualizer = Visualizer::new(19, 62);
-        //visualizer.update_values([0, 1, 2, 3, 4, 5, 6, 7, 8, 7, 6, 5, 4, 3]);
         display.add(&*visualizer);
 
         let bitrate_bar = BitrateBar::new(67, 69);
@@ -178,8 +176,7 @@ impl MainWindow {
         });
         main_win.add(&volume_slider);
 
-        let mut users = Browser::new(main_win.width() - 85 - 18, 26, 85, 120, "Users");
-        users.add("* not loaded :/");
+        let users = Browser::new(main_win.width() - 85 - 18, 26, 85, 120, "Users");
         main_win.add(&users);
 
         let mut btn_connect = Button::new(main_win.width() - 85 - 46, 26, 24, 24, "Cn");
@@ -192,7 +189,7 @@ impl MainWindow {
 
         main_win.end();
 
-        Self {
+        let mut s = Self {
             main_win,
             seek_bar,
             status_field,
@@ -206,7 +203,20 @@ impl MainWindow {
             play_status,
             volume_slider,
             art_frame,
-        }
+        };
+        s.reset();
+        s
+    }
+
+    pub fn reset(&mut self) {
+        self.lbl_title.set_text(&"hi, welcome >.<".to_string());
+        self.lbl_artist.set_label(&"...".to_string());
+        self.lbl_time.set_label(&"00:00".to_string());
+        self.art_frame.set_image(None::<fltk::image::JpegImage>);
+        self.art_frame.redraw();
+
+        self.bitrate_bar.reset();
+        self.visualizer.reset();
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -242,7 +252,7 @@ unsafe fn shitty_windows_only_hack(w: &mut DoubleWindow) {
 
     let mut style = GetWindowLongPtrW(handle, GWL_STYLE);
     style |= 0x00080000; // WS_SYSMENU - adds system menu to taskbar, alt+space etc
-    // (winamp has a custom menu there.. i wonder how to do that)
+                         // (winamp has a custom menu there.. i wonder how to do that)
     style |= 0x00020000; // WS_MINIMIZEBOX - allow minimizing
     style |= 0x00800000; // WS_BORDER - adds nice 2px border (it did one time and now it doesn't..)
     SetWindowLongPtrW(handle, GWL_STYLE, style);

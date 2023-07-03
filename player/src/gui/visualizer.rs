@@ -70,6 +70,15 @@ impl Visualizer {
         }
         self.redraw();
     }
+    pub fn reset(&mut self) {
+        // TODO: animate instead of clearing immediately?
+        {
+            let mut values = self.values.borrow_mut();
+            *values = [5; 14];
+        }
+        self.prev_vals = [5; 14];
+        self.update_values([5; 14]);
+    }
 }
 
 pub fn calculate_visualizer(samples: &[f32; 4096]) -> [u8; 14] {
