@@ -1,4 +1,3 @@
-use fltk::app::Sender;
 use fltk::button::*;
 use fltk::enums::*;
 use fltk::input::Input;
@@ -11,6 +10,7 @@ use crate::preferences::PreferencesData;
 use super::add_bar;
 use super::UIEvent;
 use super::group_box::GroupBox;
+use super::sender;
 
 pub struct PrefsWindow {
     pub main_win: Window,
@@ -19,13 +19,12 @@ pub struct PrefsWindow {
 }
 
 impl PrefsWindow {
-    pub fn make_window(s: Sender<UIEvent>) -> Self {
+    pub fn make_window() -> Self {
         let mut main_win = Window::new(100, 100, 330, 274, "Preferences");
         main_win.set_frame(FrameType::UpBox);
 
         add_bar(
             &mut main_win,
-            s.clone(),
             UIEvent::HidePrefsWindow,
             "Preferences",
         );
@@ -48,13 +47,12 @@ impl PrefsWindow {
 
         g1.end();
 
-
         let mut g2 = GroupBox::new(8,0,main_win.w()-16,100).with_label("Advanced").below_of(&*g1, 10);
         let (x, y) = (g2.x(), g2.y());
 
         // todo: some fancy auto-save modeless dialog
         let mut tmp_save_button = Button::new(x+10, y+10, 85, 25, "saveeee");
-        tmp_save_button.emit(s.clone(), UIEvent::PleaseSavePreferencesWithThisData); // this is...... silly but idek
+        tmp_save_button.emit(sender!(), UIEvent::PleaseSavePreferencesWithThisData); // this is...... silly but idek
         
         main_win.add(&*g2);
         g2.end();

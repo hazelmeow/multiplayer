@@ -1,4 +1,3 @@
-use fltk::app::Sender;
 use fltk::browser::*;
 use fltk::button::*;
 use fltk::enums::*;
@@ -15,11 +14,11 @@ pub struct QueueWindow {
 }
 
 impl QueueWindow {
-    pub fn make_window(s: Sender<UIEvent>) -> Self {
+    pub fn make_window() -> Self {
         let mut main_win = Window::new(100, 100, 300, 400, "queue");
         main_win.set_frame(FrameType::UpBox);
 
-        add_bar(&mut main_win, s.clone(), UIEvent::HideQueue, "Queue");
+        add_bar(&mut main_win, UIEvent::HideQueue, "Queue");
         main_win.set_border(false);
 
         let mut main_grp = Group::new(0, 24, main_win.width(), main_win.height() - 21, "");

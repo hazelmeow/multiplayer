@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use connection::{ConnectionActor, ConnectionActorHandle};
 use futures::future::join_all;
-use gui::UIThreadHandle;
 use key::Key;
 use preferences::Preferences;
 use tokio::sync::RwLock;
@@ -21,7 +20,7 @@ use crate::audio::AudioCommand;
 
 mod gui;
 use crate::gui::connection_window::ServerStatus;
-use crate::gui::{ConnectionDlgEvent, UIEvent, UIThread, UIUpdateEvent};
+use crate::gui::{ui_update, ConnectionDlgEvent, UIEvent, UIThread, UIUpdateEvent};
 
 use protocol::{RoomOptions, Track};
 
@@ -136,7 +135,6 @@ struct MainThread {
 
     connection: Option<ConnectionActorHandle>,
 
-    ui: UIThreadHandle,
     ui_rx: tokio::sync::mpsc::UnboundedReceiver<UIEvent>,
 
     volume: f32,
@@ -162,16 +160,15 @@ impl MainThread {
             connection: None,
         }));
 
-        let (mut ui, ui_rx) = UIThread::spawn(state.clone());
+        let (ui_rx) = UIThread::spawn(state.clone());
 
-        ui.update(UIUpdateEvent::Volume(volume));
+        ui_update!(UIUpdateEvent::Volume(volume));
 
         MainThread {
             state,
 
             connection: None,
 
-            ui,
             ui_rx,
 
             volume,
@@ -180,7 +177,7 @@ impl MainThread {
 
     // main loop
     async fn run(&mut self) {
-        self.ui.update(UIUpdateEvent::Status);
+        ui_update!(UIUpdateEvent::Status);
 
         let mut ui_interval = tokio::time::interval(tokio::time::Duration::from_millis(50));
 
@@ -223,13 +220,12 @@ impl MainThread {
                             let state = self.state.read().await;
                             let servers = state.preferences.servers.clone();
 
-                            self.ui.update(UIUpdateEvent::UpdateConnectionTree(servers.iter().map(|s| ServerStatus::from(s.clone())).collect()));
+                            ui_update!(UIUpdateEvent::UpdateConnectionTree(servers.iter().map(|s| ServerStatus::from(s.clone())).collect()));
 
                             for server in servers {
-                                let mut ui2 = self.ui.clone();
                                 tokio::spawn(async move {
                                     let s = connection::query_server(server).await;
-                                    ui2.update(UIUpdateEvent::UpdateConnectionTreePartial(s));
+                                    ui_update!(UIUpdateEvent::UpdateConnectionTreePartial(s));
                                 });
                             }
                         },
@@ -242,7 +238,7 @@ impl MainThread {
                                 // TODO check if this works
                                 println!("create_room got response: {:?}", room_id);
 
-                                self.ui.update(UIUpdateEvent::Status);
+                                ui_update!(UIUpdateEvent::Status);
                             }
                         },
 
@@ -261,7 +257,7 @@ impl MainThread {
                                 let mut s = self.state.write().await;
 
                                 s.loading_count += num_tracks;
-                                self.ui.update(UIUpdateEvent::Status);
+                                ui_update!(UIUpdateEvent::Status);
 
                                 paths
                                     .into_iter()
@@ -318,7 +314,7 @@ impl MainThread {
                             {
                                 let mut s = self.state.write().await;
                                 s.loading_count -= num_tracks;
-                                self.ui.update(UIUpdateEvent::Status);
+                                ui_update!(UIUpdateEvent::Status);
                             }
                         }
 
@@ -342,12 +338,12 @@ impl MainThread {
                         }
                         UIEvent::VolumeUp => {
                             self.volume = (self.volume + 0.02).min(1.);
-                            self.ui.update(UIUpdateEvent::Volume(self.volume));
+                            ui_update!(UIUpdateEvent::Volume(self.volume));
                             self.try_update_volume();
                         }
                         UIEvent::VolumeDown => {
                             self.volume = (self.volume - 0.02).max(0.);
-                            self.ui.update(UIUpdateEvent::Volume(self.volume));
+                            ui_update!(UIUpdateEvent::Volume(self.volume));
                             self.try_update_volume();
                         }
                         UIEvent::SavePreferences{name} => {
@@ -363,7 +359,7 @@ impl MainThread {
                 },
 
                 _ = ui_interval.tick() => {
-                    self.ui.update(UIUpdateEvent::Periodic);
+                    ui_update!(UIUpdateEvent::Periodic);
                 },
             }
         }
@@ -381,7 +377,7 @@ impl MainThread {
     }
 
     async fn connect(&mut self, server: Server) {
-        let result = ConnectionActor::spawn(self.state.clone(), self.ui.clone(), server).await;
+        let result = ConnectionActor::spawn(self.state.clone(), server).await;
         match result {
             Ok(c) => {
                 self.connection = Some(c);
@@ -392,8 +388,8 @@ impl MainThread {
             }
         }
 
-        self.ui.update(UIUpdateEvent::ConnectionChanged);
-        self.ui.update(UIUpdateEvent::Status);
+        ui_update!(UIUpdateEvent::ConnectionChanged);
+        ui_update!(UIUpdateEvent::Status);
     }
 
     async fn disconnect(&mut self) {
@@ -405,11 +401,10 @@ impl MainThread {
 
         // query old server's list after we disconnect so it updates properly?
         if let Some(c) = &state.connection {
-            let mut ui2 = self.ui.clone();
             let server = c.server.clone();
             tokio::spawn(async move {
                 let s = connection::query_server(server).await;
-                ui2.update(UIUpdateEvent::UpdateConnectionTreePartial(s));
+                ui_update!(UIUpdateEvent::UpdateConnectionTreePartial(s));
             });
         }
 
@@ -417,10 +412,10 @@ impl MainThread {
 
         drop(state);
 
-        self.ui.update(UIUpdateEvent::ConnectionChanged);
-        self.ui.update(UIUpdateEvent::UserListChanged);
-        self.ui.update(UIUpdateEvent::QueueChanged);
-        self.ui.update(UIUpdateEvent::Reset);
+        ui_update!(UIUpdateEvent::ConnectionChanged);
+        ui_update!(UIUpdateEvent::UserListChanged);
+        ui_update!(UIUpdateEvent::QueueChanged);
+        ui_update!(UIUpdateEvent::Reset);
     }
 }
 

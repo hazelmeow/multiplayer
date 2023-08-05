@@ -1,4 +1,3 @@
-use fltk::app::Sender;
 use fltk::browser::*;
 use fltk::button::*;
 use fltk::enums::*;
@@ -16,6 +15,7 @@ use super::visualizer::*;
 
 use super::add_bar;
 use super::UIEvent;
+use super::{sender, ui_send};
 
 pub struct MainWindow {
     pub main_win: Window,
@@ -33,7 +33,7 @@ pub struct MainWindow {
     pub art_frame: Frame,
 }
 impl MainWindow {
-    pub fn make_window(s: Sender<UIEvent>) -> Self {
+    pub fn make_window() -> Self {
         let mut main_win = Window::new(100, 100, 400, 190, "multiplayer :3");
         //main_win.set_border(false);
         main_win.set_frame(FrameType::UpBox);
@@ -46,7 +46,7 @@ impl MainWindow {
         bar_frame.set_color(Color::Background);
         main_win.add(&bar_frame); */
 
-        add_bar(&mut main_win, s.clone(), UIEvent::Quit, "multiplayer :3");
+        add_bar(&mut main_win, UIEvent::Quit, "multiplayer :3");
 
         // --- buttons ---
         let buttons_y = 130;
@@ -58,7 +58,7 @@ impl MainWindow {
             PngImage::from_data(include_bytes!("../../rsrc/btn_prev.png")).unwrap(),
         ));
         btn_prev.set_align(Align::ImageBackdrop);
-        btn_prev.emit(s.clone(), UIEvent::BtnPrev);
+        btn_prev.emit(sender!(), UIEvent::BtnPrev);
         main_win.add(&btn_prev);
 
         let mut btn_play = Button::new(buttons_left + bp, buttons_y, 36, 26, "");
@@ -66,7 +66,7 @@ impl MainWindow {
             PngImage::from_data(include_bytes!("../../rsrc/btn_play.png")).unwrap(),
         ));
         btn_play.set_align(Align::ImageBackdrop);
-        btn_play.emit(s.clone(), UIEvent::BtnPlay);
+        btn_play.emit(sender!(), UIEvent::BtnPlay);
         main_win.add(&btn_play);
 
         let mut btn_pause = Button::new(buttons_left + bp * 2, buttons_y, 36, 26, "");
@@ -74,7 +74,7 @@ impl MainWindow {
             PngImage::from_data(include_bytes!("../../rsrc/btn_pause.png")).unwrap(),
         ));
         btn_pause.set_align(Align::ImageBackdrop);
-        btn_pause.emit(s.clone(), UIEvent::BtnPause);
+        btn_pause.emit(sender!(), UIEvent::BtnPause);
         main_win.add(&btn_pause);
 
         let mut btn_stop = Button::new(buttons_left + bp * 3, buttons_y, 36, 26, "");
@@ -82,7 +82,7 @@ impl MainWindow {
             PngImage::from_data(include_bytes!("../../rsrc/btn_stop.png")).unwrap(),
         ));
         btn_stop.set_align(Align::ImageBackdrop);
-        btn_stop.emit(s.clone(), UIEvent::BtnStop);
+        btn_stop.emit(sender!(), UIEvent::BtnStop);
         main_win.add(&btn_stop);
 
         let mut btn_next = Button::new(buttons_left + bp * 4, buttons_y, 36, 26, "");
@@ -90,7 +90,7 @@ impl MainWindow {
             PngImage::from_data(include_bytes!("../../rsrc/btn_next.png")).unwrap(),
         ));
         btn_next.set_align(Align::ImageBackdrop);
-        btn_next.emit(s.clone(), UIEvent::BtnNext);
+        btn_next.emit(sender!(), UIEvent::BtnNext);
         main_win.add(&btn_next);
 
         // --- end buttons ---
@@ -170,9 +170,8 @@ impl MainWindow {
         let mut volume_slider = HorSlider::new(110, 70, 80, 13, "");
         volume_slider.set_bounds(0., 1.);
         volume_slider.set_step(0.01, 1);
-        let tmp = s.clone();
         volume_slider.set_callback(move |vs| {
-            tmp.send(UIEvent::VolumeSlider(vs.value() as f32));
+            ui_send!(UIEvent::VolumeSlider(vs.value() as f32));
         });
         main_win.add(&volume_slider);
 
@@ -180,11 +179,11 @@ impl MainWindow {
         main_win.add(&users);
 
         let mut btn_connect = Button::new(main_win.width() - 85 - 46, 26, 24, 24, "Cn");
-        btn_connect.emit(s.clone(), UIEvent::BtnOpenConnectionDialog);
+        btn_connect.emit(sender!(), UIEvent::BtnOpenConnectionDialog);
         main_win.add(&btn_connect);
 
         let mut btn_queue = Button::new(main_win.width() - 85 - 46, 26 + 24 + 2, 24, 24, "Qu");
-        btn_queue.emit(s.clone(), UIEvent::BtnQueue);
+        btn_queue.emit(sender!(), UIEvent::BtnQueue);
         main_win.add(&btn_queue);
 
         main_win.end();

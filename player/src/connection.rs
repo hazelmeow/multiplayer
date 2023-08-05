@@ -16,7 +16,7 @@ use protocol::{AudioData, Message, Notification, Request, Response, RoomOptions,
 
 use crate::{
     audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
-    gui::{connection_window::ServerStatus, UIThreadHandle, UIUpdateEvent},
+    gui::{connection_window::ServerStatus, ui_update, UIUpdateEvent},
     preferences::Server,
     transmit::{TransmitCommand, TransmitThread, TransmitThreadHandle},
     AudioStatus, ConnectionState, RoomState, State,
@@ -122,8 +122,6 @@ pub struct ConnectionActor {
 
     state: Arc<RwLock<State>>,
 
-    ui: UIThreadHandle,
-
     transmit: TransmitThreadHandle,
     audio: AudioThreadHandle,
     audio_data_rx: mpsc::UnboundedReceiver<AudioData>,
@@ -135,7 +133,6 @@ pub struct ConnectionActor {
 impl ConnectionActor {
     pub async fn spawn(
         state: Arc<RwLock<State>>,
-        ui: UIThreadHandle,
         server: Server,
     ) -> Result<ConnectionActorHandle, Box<dyn Error>> {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -158,7 +155,6 @@ impl ConnectionActor {
             let mut t = ConnectionActor::new(
                 state2,
                 server,
-                ui,
                 transmit2,
                 audio2,
                 audio_data_rx,
@@ -204,7 +200,6 @@ impl ConnectionActor {
     pub async fn new(
         state: Arc<RwLock<State>>,
         server: Server,
-        ui: UIThreadHandle,
         transmit: TransmitThreadHandle,
         audio: AudioThreadHandle,
         audio_data_rx: mpsc::UnboundedReceiver<AudioData>,
@@ -222,8 +217,6 @@ impl ConnectionActor {
             stream,
             next_id: 0,
             pending: HashMap::new(),
-
-            ui,
 
             transmit,
             audio,
@@ -306,22 +299,22 @@ impl ConnectionActor {
                                 },
                                 None => 0.0
                             };
-                            self.ui.update(UIUpdateEvent::SetTime(elapsed, total));
+                            ui_update!(UIUpdateEvent::SetTime(elapsed, total));
                         }
                         AudioStatus::Buffering(is_buffering) => {
                             let mut s = self.state.write().await;
                             s.connection.as_mut().unwrap().room.as_mut().unwrap().buffering = is_buffering;
 
-                            self.ui.update(UIUpdateEvent::Status);
+                            ui_update!(UIUpdateEvent::Status);
                         }
                         AudioStatus::Finished => {
-                            self.ui.update(UIUpdateEvent::Status);
+                            ui_update!(UIUpdateEvent::Status);
                         }
                         AudioStatus::Visualizer(bars) => {
-                            self.ui.update(UIUpdateEvent::Visualizer(bars))
+                            ui_update!(UIUpdateEvent::Visualizer(bars))
                         }
                         AudioStatus::Buffer(val) => {
-                            self.ui.update(UIUpdateEvent::Buffer(val))
+                            ui_update!(UIUpdateEvent::Buffer(val))
                         }
                     }
                 },
@@ -421,8 +414,8 @@ impl ConnectionActor {
                 let mut room = conn.room.as_mut().expect("lol");
                 room.queue = queue;
 
-                self.ui.update(UIUpdateEvent::QueueChanged);
-                self.ui.update(UIUpdateEvent::Status);
+                ui_update!(UIUpdateEvent::QueueChanged);
+                ui_update!(UIUpdateEvent::Status);
             }
             Notification::Playing(playing) => {
                 // println!("got playing: {:?}", playing);
@@ -439,14 +432,14 @@ impl ConnectionActor {
                     }
                 }
 
-                self.ui.update(UIUpdateEvent::QueueChanged);
-                self.ui.update(UIUpdateEvent::Status);
+                ui_update!(UIUpdateEvent::QueueChanged);
+                ui_update!(UIUpdateEvent::Status);
             }
             Notification::ConnectedUsers(list) => {
                 let mut room = conn.room.as_mut().expect("lol");
                 room.connected_users = list;
 
-                self.ui.update(UIUpdateEvent::UserListChanged);
+                ui_update!(UIUpdateEvent::UserListChanged);
             }
             Notification::Room(maybe_room) => {
                 match maybe_room {
@@ -466,10 +459,10 @@ impl ConnectionActor {
                     }
                 }
 
-                self.ui.update(UIUpdateEvent::RoomChanged);
-                self.ui.update(UIUpdateEvent::QueueChanged);
-                self.ui.update(UIUpdateEvent::UserListChanged);
-                self.ui.update(UIUpdateEvent::Status);
+                ui_update!(UIUpdateEvent::RoomChanged);
+                ui_update!(UIUpdateEvent::QueueChanged);
+                ui_update!(UIUpdateEvent::UserListChanged);
+                ui_update!(UIUpdateEvent::Status);
             }
             Notification::RoomList(list) => {
                 // TODO: we should probably do the server status state differently
@@ -478,8 +471,7 @@ impl ConnectionActor {
                     rooms: Some(list),
                     tried: true,
                 };
-                self.ui
-                    .update(UIUpdateEvent::UpdateConnectionTreePartial(s));
+                ui_update!(UIUpdateEvent::UpdateConnectionTreePartial(s));
             }
         }
     }

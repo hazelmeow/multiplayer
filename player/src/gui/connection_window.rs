@@ -1,7 +1,6 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use fltk::app::Sender;
 use fltk::browser::*;
 use fltk::button::*;
 use fltk::enums::*;
@@ -18,6 +17,8 @@ use crate::preferences::Server;
 use crate::State;
 
 use super::add_bar;
+use super::sender;
+use super::ui_send;
 use super::ConnectionDlgEvent;
 use super::UIEvent;
 
@@ -28,13 +29,12 @@ pub struct ConnectionWindow {
 }
 
 impl ConnectionWindow {
-    pub fn make_window(s: Sender<UIEvent>, state: Arc<RwLock<State>>) -> Self {
+    pub fn make_window(state: Arc<RwLock<State>>) -> Self {
         let mut main_win = Window::new(100, 100, 330, 300, "queue");
         main_win.set_frame(FrameType::UpBox);
 
         add_bar(
             &mut main_win,
-            s.clone(),
             UIEvent::HideConnectionWindow,
             "Connect to Server",
         );
@@ -50,21 +50,21 @@ impl ConnectionWindow {
 
         let mut btn_connect = Button::new(235, 32, 85, 25, "Connect");
         btn_connect.emit(
-            s.clone(),
+            sender!(),
             UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnConnect),
         );
         main_win.add(&btn_connect);
 
         let mut btn_new_room = Button::new(0, 0, 85, 25, "New Room").below_of(&btn_connect, 4);
         btn_new_room.emit(
-            s.clone(),
+            sender!(),
             UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnNewRoom),
         );
         main_win.add(&btn_new_room);
 
         let mut btn_refresh = Button::new(0, 0, 85, 25, "Refresh").below_of(&btn_new_room, 4);
         btn_refresh.emit(
-            s.clone(),
+            sender!(),
             UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh),
         );
         main_win.add(&btn_refresh);
@@ -77,7 +77,6 @@ impl ConnectionWindow {
         tree.set_trigger(CallbackTrigger::Release);
         tree.set_item_reselect_mode(fltk::tree::TreeItemReselectMode::Always);
 
-        let s2 = s.clone();
         tree.set_callback(move |t| {
             if let Some(mut selected) = t.first_selected_item() {
                 match t.callback_reason() {
@@ -100,7 +99,7 @@ impl ConnectionWindow {
                         _ => unreachable!(),
                     },
                     TreeReason::Reselected => match selected.depth() {
-                        1 | 2 => s2.send(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnConnect)),
+                        1 | 2 => ui_send!(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnConnect)),
                         _ => {}
                     },
                     _ => {}

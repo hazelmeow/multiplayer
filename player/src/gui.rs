@@ -3,7 +3,6 @@ use std::sync::Arc;
 use fltk::app;
 use fltk::app::App;
 use fltk::app::Receiver;
-use fltk::app::Sender;
 use fltk::button::*;
 use fltk::draw;
 use fltk::enums::*;
@@ -37,6 +36,32 @@ use self::main_window::*;
 use self::play_status::PlayStatusIcon;
 use self::preferences_window::PrefsWindow;
 use self::queue_window::QueueWindow;
+
+/// Get the global FLTK sender
+macro_rules! sender {
+    () => {
+        fltk::app::Sender::<UIEvent>::get()
+    };
+}
+/// Send a UIEvent through the global FLTK sender
+macro_rules! ui_send {
+    ($expression:expr) => {{
+        use crate::gui::UIEvent;
+        let s = fltk::app::Sender::<UIEvent>::get();
+        s.send($expression);
+    }};
+}
+/// Send a UIUpdateEvent through the global FLTK sender
+macro_rules! ui_update {
+    ($expression:expr) => {{
+        use crate::gui::UIEvent;
+        let s = fltk::app::Sender::<UIEvent>::get();
+        s.send(UIEvent::Update($expression));
+    }};
+}
+pub(crate) use sender;
+pub(crate) use ui_send;
+pub(crate) use ui_update;
 
 // only temporary
 #[derive(Debug, Clone)]
@@ -108,22 +133,10 @@ impl DragState {
     }
 }
 
-#[derive(Clone)]
-pub struct UIThreadHandle {
-    sender: Sender<UIEvent>,
-}
-
-impl UIThreadHandle {
-    pub fn update(&mut self, update: UIUpdateEvent) {
-        self.sender.send(UIEvent::Update(update))
-    }
-}
-
 type UiTx = tokio::sync::mpsc::UnboundedSender<UIEvent>;
 type UiRx = tokio::sync::mpsc::UnboundedReceiver<UIEvent>;
 pub struct UIThread {
     app: App,
-    sender: Sender<UIEvent>,
     receiver: Receiver<UIEvent>,
     tx: UiTx,
 
@@ -166,31 +179,24 @@ impl AllWindowEdges {
 }
 
 impl UIThread {
-    // TODO: put the id somewhere nicer
-    pub fn spawn(state: Arc<RwLock<State>>) -> (UIThreadHandle, mpsc::UnboundedReceiver<UIEvent>) {
+    pub fn spawn(state: Arc<RwLock<State>>) -> mpsc::UnboundedReceiver<UIEvent> {
         // from anywhere to ui (including ui to ui..?)
-        let (sender, receiver) = fltk::app::channel::<UIEvent>();
+        let (_, receiver) = fltk::app::channel::<UIEvent>();
 
         // from main thread logic to ui
         let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UIEvent>();
 
-        let thread_sender = sender.to_owned();
         std::thread::spawn(move || {
-            let mut t = UIThread::new(thread_sender, receiver, ui_tx, state);
+            let mut t = UIThread::new(receiver, ui_tx, state);
             t.run();
         });
 
         // ui_rx can't be part of the handle because the handle needs to be clone
         // only one thing can own and consume from the receiver
-        (UIThreadHandle { sender }, ui_rx)
+        ui_rx
     }
 
-    fn new(
-        sender: Sender<UIEvent>,
-        receiver: Receiver<UIEvent>,
-        tx: UiTx,
-        state: Arc<RwLock<State>>,
-    ) -> Self {
+    fn new(receiver: Receiver<UIEvent>, tx: UiTx, state: Arc<RwLock<State>>) -> Self {
         let app = fltk::app::App::default();
         let widgets = fltk_theme::WidgetTheme::new(fltk_theme::ThemeType::Classic);
         widgets.apply();
@@ -198,10 +204,10 @@ impl UIThread {
         let theme = fltk_theme::ColorTheme::new(fltk_theme::color_themes::GRAY_THEME);
         theme.apply();
 
-        let mut gui = MainWindow::make_window(sender.clone());
-        let queue_gui = QueueWindow::make_window(sender.clone());
-        let connection_gui = ConnectionWindow::make_window(sender.clone(), state.clone());
-        let mut prefs_gui = PrefsWindow::make_window(sender.clone());
+        let mut gui = MainWindow::make_window();
+        let queue_gui = QueueWindow::make_window();
+        let connection_gui = ConnectionWindow::make_window(state.clone());
+        let mut prefs_gui = PrefsWindow::make_window();
         prefs_gui.main_win.show();
         prefs_gui.load_state(&state.blocking_read().preferences);
 
@@ -210,7 +216,7 @@ impl UIThread {
         gui.main_win.show();
         gui.fix_taskbar_after_show();
 
-        gui.main_win.emit(sender.clone(), UIEvent::Quit);
+        gui.main_win.emit(sender!(), UIEvent::Quit);
 
         // TODO: we'd probably have to communicate this somehow
         //       for now just pretend
@@ -221,7 +227,6 @@ impl UIThread {
 
         UIThread {
             app,
-            sender,
             receiver,
             tx,
 
@@ -243,32 +248,28 @@ impl UIThread {
         let edges_lock = Arc::new(RwLock::new(edges_state));
 
         let mut ds = DragState::default().with_id(0);
-        let sender = self.sender.clone();
         let edges = edges_lock.clone();
-        self.gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, edges.clone(), sender.clone(), w, ev)
-        });
+        self.gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
 
         let mut ds = DragState::default().with_id(1);
-        let sender = self.sender.clone();
         let edges = edges_lock.clone();
-        self.queue_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, edges.clone(), sender.clone(), w, ev)
-        });
+        self.queue_gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
 
         let mut ds = DragState::default().with_id(2);
-        let sender = self.sender.clone();
         let edges = edges_lock.clone();
-        self.connection_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, edges.clone(), sender.clone(), w, ev)
-        });
+        self.connection_gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
 
         let mut ds = DragState::default();
-        let sender = self.sender.clone();
         let edges = edges_lock.clone();
-        self.prefs_gui.main_win.handle(move |w, ev| {
-            Self::handle_window_event(&mut ds, edges.clone(), sender.clone(), w, ev)
-        });
+        self.prefs_gui
+            .main_win
+            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
 
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
@@ -314,7 +315,7 @@ impl UIThread {
                         // if already playing, do nothing
                     }
                     UIEvent::BtnStop => {
-                        self.send(UIEvent::Stop);
+                        ui_send!(UIEvent::Stop);
                     }
                     UIEvent::BtnPause => {}
                     UIEvent::BtnNext => {}
@@ -340,7 +341,7 @@ impl UIThread {
                         self.prefs_gui.main_win.hide();
                     }
                     UIEvent::PleaseSavePreferencesWithThisData => {
-                        self.sender.send(UIEvent::SavePreferences {
+                        ui_send!(UIEvent::SavePreferences {
                             name: self.prefs_gui.fld_name.value(),
                         });
                     }
@@ -590,15 +591,9 @@ impl UIThread {
         }
     }
 
-    // send to our own loop which also sends to main thread
-    fn send(&self, ev: UIEvent) {
-        self.sender.send(ev);
-    }
-
     fn handle_window_event(
         state: &mut DragState,
         edges: Arc<RwLock<AllWindowEdges>>,
-        sender: Sender<UIEvent>,
         w: &mut DoubleWindow,
         ev: Event,
     ) -> bool {
@@ -757,7 +752,7 @@ impl UIThread {
             }
             fltk::enums::Event::Paste => {
                 if state.dnd && state.released {
-                    sender.send(UIEvent::DroppedFiles(app::event_text()));
+                    ui_send!(UIEvent::DroppedFiles(app::event_text()));
                     state.dnd = false;
                     state.released = false;
                     true
@@ -776,11 +771,11 @@ impl UIThread {
                 match dy {
                     // uhhhhhhhh these are the opposite of what you'd think (???)
                     app::MouseWheel::Up => {
-                        sender.send(UIEvent::VolumeDown);
+                        ui_send!(UIEvent::VolumeDown);
                         true
                     }
                     app::MouseWheel::Down => {
-                        sender.send(UIEvent::VolumeUp);
+                        ui_send!(UIEvent::VolumeUp);
                         true
                     }
                     _ => false,
@@ -822,7 +817,7 @@ fn create_horizontal_gradient_frame(
     frame
 }
 
-fn add_bar(win: &mut DoubleWindow, s: Sender<UIEvent>, close_message: UIEvent, title: &str) {
+fn add_bar(win: &mut DoubleWindow, close_message: UIEvent, title: &str) {
     let mut bar = Group::new(4, 4, win.width() - 8, 17, "");
     let mut bar_bg = create_horizontal_gradient_frame(
         4,
@@ -851,7 +846,7 @@ fn add_bar(win: &mut DoubleWindow, s: Sender<UIEvent>, close_message: UIEvent, t
     bar_btn_close.set_align(Align::Center | Align::ImageBackdrop);
     //bar_btn_close.set_color(Color::White);
     //bar_btn_close.set_frame(FrameType::BorderBox);
-    bar_btn_close.emit(s, close_message);
+    bar_btn_close.emit(sender!(), close_message);
     bar.add(&bar_btn_close);
 
     bar.end();
