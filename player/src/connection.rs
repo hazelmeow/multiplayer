@@ -295,7 +295,7 @@ impl ConnectionActor {
                 // received a status from audio
                 Some(msg) = self.audio_status_rx.recv() => {
                     match msg {
-                        AudioStatus::Elapsed(secs) => {
+                        AudioStatus::Elapsed(elapsed) => {
                             let s = self.state.read().await;
                             let conn = s.connection.as_ref().unwrap();
                             let room = conn.room.as_ref().expect("lol");
@@ -304,9 +304,9 @@ impl ConnectionActor {
                                 Some(t) => {
                                     t.metadata.duration
                                 },
-                                None => 0
+                                None => 0.0
                             };
-                            self.ui.update(UIUpdateEvent::SetTime(secs, total as usize));
+                            self.ui.update(UIUpdateEvent::SetTime(elapsed, total));
                         }
                         AudioStatus::Buffering(is_buffering) => {
                             let mut s = self.state.write().await;

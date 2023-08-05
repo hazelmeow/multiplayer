@@ -70,7 +70,7 @@ pub enum UIEvent {
 #[derive(Debug, Clone)]
 pub enum UIUpdateEvent {
     Reset,
-    SetTime(usize, usize),
+    SetTime(f32, f32),
     UserListChanged,
     RoomChanged,
     QueueChanged,
@@ -362,8 +362,8 @@ impl UIThread {
             UIUpdateEvent::SetTime(elapsed, total) => {
                 // TODO: switch between elapsed and remaining on there
                 self.gui.lbl_time.set_label(&min_secs(elapsed));
-                let progress = elapsed as f64 / total as f64;
-                self.gui.seek_bar.set_value(progress);
+                let progress = elapsed / total;
+                self.gui.seek_bar.set_value(progress as f64);
             }
             UIUpdateEvent::Visualizer(bars) => {
                 self.gui.visualizer.update_values(bars);
@@ -428,7 +428,7 @@ impl UIThread {
                             let line = format!(
                                 "@b{}\t[{}] {}",
                                 name.unwrap_or(&"?".into()),
-                                min_secs(track.metadata.duration as usize),
+                                min_secs(track.metadata.duration),
                                 track
                                     .metadata
                                     .title
@@ -475,7 +475,7 @@ impl UIThread {
                             let line = format!(
                                 "{}\t[{}] {}",
                                 name.unwrap_or(&"?".into()),
-                                min_secs(track.metadata.duration as usize),
+                                min_secs(track.metadata.duration),
                                 track
                                     .metadata
                                     .title
@@ -858,6 +858,7 @@ fn add_bar(win: &mut DoubleWindow, s: Sender<UIEvent>, close_message: UIEvent, t
     win.add(&bar);
 }
 
-fn min_secs(secs: usize) -> String {
-    format!("{:02}:{:02}", secs / 60, secs % 60)
+fn min_secs(secs: f32) -> String {
+    let int_secs = secs as u32;
+    format!("{:02}:{:02}", int_secs / 60, int_secs % 60)
 }

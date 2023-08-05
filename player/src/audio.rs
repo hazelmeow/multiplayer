@@ -130,8 +130,9 @@ impl Player {
         let buffer = self.buffer.lock().unwrap();
         buffer.len() > 48000 * 2 // 2s...
     }
-    pub fn get_seconds_elapsed(&self) -> usize {
-        self.frames_received * 480 / 48000
+    pub fn get_seconds_elapsed(&self) -> f32 {
+        // num frames * samples per frame / sample rate
+        (self.frames_received as f32) * 480.0 / 48000.0
     }
     pub fn fake_frames_received(&mut self, frames: usize) {
         self.frames_received = frames;
@@ -311,7 +312,7 @@ impl AudioThread {
                 }
 
                 AudioCommand::Clear => {
-                    let _ = self.tx.send(AudioStatus::Elapsed(0));
+                    let _ = self.tx.send(AudioStatus::Elapsed(0.0));
                     self.p.clear();
                 }
                 AudioCommand::Volume(val) => {

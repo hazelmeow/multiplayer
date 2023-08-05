@@ -32,7 +32,7 @@ pub enum TrackArt {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct TrackMetadata {
-    pub duration: u32,
+    pub duration: f32,
     pub track_no: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,

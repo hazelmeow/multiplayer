@@ -98,7 +98,7 @@ impl AudioInfoReader {
         };
         let spec = *decoded.spec();
 
-        let duration = self
+        let num_frames = self
             .probe_result
             .format
             .default_track()
@@ -118,8 +118,10 @@ impl AudioInfoReader {
         self.decoder.reset();
 
         // read track metadata
-        let mut track_md = TrackMetadata::default();
-        track_md.duration = (duration as f64 / spec.rate as f64) as u32;
+        let mut track_md = TrackMetadata {
+            duration: num_frames as f32 / spec.rate as f32,
+            ..Default::default()
+        };
 
         let mut format_md = self.probe_result.format.metadata();
         if let Some(rev) = format_md.skip_to_latest() {
