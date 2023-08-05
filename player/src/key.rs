@@ -26,11 +26,11 @@ impl Key {
             let key = fs::read_to_string(key_path)?;
             let key: Vec<u8> = hex::decode(key.as_bytes())?;
             let key = GenericArray::from_slice(key.as_slice());
-            return Ok(Aes256GcmSiv::new(key));
+            Ok(Aes256GcmSiv::new(key))
         } else {
             let key = Aes256GcmSiv::generate_key(&mut OsRng);
             fs::write(key_path, hex::encode(key))?;
-            return Ok(Aes256GcmSiv::new(&key));
+            Ok(Aes256GcmSiv::new(&key))
         }
     }
 

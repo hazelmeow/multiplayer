@@ -1,4 +1,3 @@
-use std::iter;
 use std::sync::Arc;
 
 use fltk::app;
@@ -204,7 +203,7 @@ impl UIThread {
         let connection_gui = ConnectionWindow::make_window(sender.clone(), state.clone());
         let mut prefs_gui = PrefsWindow::make_window(sender.clone());
         prefs_gui.main_win.show();
-        prefs_gui.load_state(&*state.blocking_read().preferences);
+        prefs_gui.load_state(&state.blocking_read().preferences);
 
         // stuff for cool custom titlebars
         gui.main_win.set_border(false);
@@ -399,14 +398,14 @@ impl UIThread {
 
                         for (id, name) in r.connected_users.iter() {
                             let line = if id == &s.my_id {
-                                format!("@b* you")
+                                "@b* you".to_string()
                             } else {
                                 format!("* {} ({})", name, id)
                             };
                             self.gui.users.add(&line);
                         }
                     } else {
-                        self.gui.users.add("no room".into());
+                        self.gui.users.add("no room");
                     }
                 } else {
                     // not connected
@@ -458,13 +457,10 @@ impl UIThread {
 
                             if let Some(art) = &track.metadata.art {
                                 if let Err(err) = match art {
-                                    TrackArt::Jpeg(data) => {
-                                        JpegImage::from_data(&data).and_then(|img| {
-                                            self.gui.art_frame.set_image(Some(img));
-                                            self.gui.art_frame.redraw();
-                                            Ok(())
-                                        })
-                                    }
+                                    TrackArt::Jpeg(data) => JpegImage::from_data(data).map(|img| {
+                                        self.gui.art_frame.set_image(Some(img));
+                                        self.gui.art_frame.redraw();
+                                    }),
                                 } {
                                     eprintln!("failed to load image: {:?}", err);
                                 }
@@ -560,15 +556,17 @@ impl UIThread {
         let state = self.state.blocking_read();
 
         if let Some(connection) = &state.connection {
-            if state.loading_count == 1 {
-                return format!("Loading 1 file...");
-            } else if state.loading_count > 1 {
-                return format!("Loading {} files...", state.loading_count);
+            if state.loading_count > 0 {
+                if state.loading_count == 1 {
+                    return "Loading 1 file...".to_string();
+                } else {
+                    return format!("Loading {} files...", state.loading_count);
+                }
             }
 
             if let Some(r) = &connection.room {
                 if r.buffering {
-                    return format!("Buffering...");
+                    return "Buffering...".to_string();
                 }
 
                 if let Some(t) = &r.playing {
@@ -586,9 +584,9 @@ impl UIThread {
                 }
             }
 
-            return format!("Connected to {}", connection.server.addr);
+            format!("Connected to {}", connection.server.addr)
         } else {
-            format!("<not connected>")
+            "<not connected>".to_string()
         }
     }
 
@@ -742,7 +740,7 @@ impl UIThread {
 
                 if let Some(id) = state.id {
                     let mut edges = edges.blocking_write();
-                    edges.update_window(id, &w);
+                    edges.update_window(id, w);
                 }
 
                 true
@@ -853,7 +851,7 @@ fn add_bar(win: &mut DoubleWindow, s: Sender<UIEvent>, close_message: UIEvent, t
     bar_btn_close.set_align(Align::Center | Align::ImageBackdrop);
     //bar_btn_close.set_color(Color::White);
     //bar_btn_close.set_frame(FrameType::BorderBox);
-    bar_btn_close.emit(s.clone(), close_message);
+    bar_btn_close.emit(s, close_message);
     bar.add(&bar_btn_close);
 
     bar.end();

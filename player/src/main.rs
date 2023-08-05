@@ -250,7 +250,7 @@ impl MainThread {
                             let Some(conn) = self.connection.as_mut() else { continue };
 
                             let paths: Vec<std::path::PathBuf> = data
-                                .split("\n")
+                                .split('\n')
                                 .map(|p| std::path::PathBuf::from(p.trim().replace("file://", "")))
                                 .filter(|p| p.exists())
                                 .collect();
@@ -305,7 +305,7 @@ impl MainThread {
 
                             tracks.sort_by_key(|t| {
                                 let s = t.metadata.track_no.clone().unwrap_or_default();
-                                let n = s.split("/").nth(0).unwrap().parse::<usize>().unwrap_or_default();
+                                let n = s.split('/').next().unwrap().parse::<usize>().unwrap_or_default();
                                 (t.metadata.album.clone().unwrap_or_default(), n)
                             });
 
@@ -314,8 +314,6 @@ impl MainThread {
                                 // TODO: do something with the success status?
                                 let _ = conn.queue_push(t).await;
                             }
-
-                            drop(conn);
 
                             {
                                 let mut s = self.state.write().await;
