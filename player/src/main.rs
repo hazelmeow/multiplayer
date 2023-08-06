@@ -2,7 +2,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use connection::{ConnectionActor, ConnectionActorHandle};
-use futures::future::join_all;
 use key::Key;
 use preferences::Preferences;
 use tokio::sync::RwLock;
@@ -13,7 +12,7 @@ mod preferences;
 use crate::preferences::Server;
 
 mod transmit;
-use transmit::{AudioInfoReader, TransmitCommand};
+use crate::transmit::TransmitCommand;
 
 mod audio;
 use crate::audio::AudioCommand;
@@ -21,6 +20,8 @@ use crate::audio::AudioCommand;
 mod gui;
 use crate::gui::connection_window::ServerStatus;
 use crate::gui::{ui_update, ConnectionDlgEvent, UIEvent, UIThread, UIUpdateEvent};
+
+mod dnd_resolver;
 
 use protocol::{RoomOptions, Track};
 
@@ -245,65 +246,7 @@ impl MainThread {
                         UIEvent::DroppedFiles(data) => {
                             let Some(conn) = self.connection.as_mut() else { continue };
 
-                            let paths: Vec<std::path::PathBuf> = data
-                                .split('\n')
-                                .map(|p| std::path::PathBuf::from(p.trim().replace("file://", "")))
-                                .filter(|p| p.exists())
-                                .collect();
-
-                            let num_tracks = paths.len();
-
-                            let tasks: Vec<tokio::task::JoinHandle<Option<Track>>> = {
-                                let mut s = self.state.write().await;
-
-                                s.loading_count += num_tracks;
-                                ui_update!(UIUpdateEvent::Status);
-
-                                paths
-                                    .into_iter()
-                                    .map(|p| {
-                                        let file_string = p.as_os_str().to_string_lossy();
-                                        let encrypted_path = s.key.encrypt_path(&file_string.to_string()).unwrap();
-                                        let my_id = s.my_id.clone();
-
-                                        tokio::spawn(async move {
-                                            match AudioInfoReader::load(&p) {
-                                                Ok(mut reader) => {
-                                                    match reader.read_info() {
-                                                        Ok((_, _, metadata)) => {
-                                                            let track = protocol::Track {
-                                                                path: encrypted_path,
-                                                                owner: my_id,
-                                                                metadata
-                                                            };
-                                                            Some(track)
-                                                        }
-                                                        Err(e) => {
-                                                            println!("errored reading metadata for {:?}: {e}", p);
-                                                            None
-                                                        }
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    println!("errored loading {:?}: {e}", p);
-                                                    None
-                                                }
-                                            }
-                                        })
-                                    })
-                                    .collect()
-                            };
-
-                            let mut tracks = join_all(tasks).await.into_iter().filter_map(|t| match t {
-                                Ok(Some(t)) => Some(t),
-                                _ => None
-                            }).collect::<Vec<Track>>();
-
-                            tracks.sort_by_key(|t| {
-                                let s = t.metadata.track_no.clone().unwrap_or_default();
-                                let n = s.split('/').next().unwrap().parse::<usize>().unwrap_or_default();
-                                (t.metadata.album.clone().unwrap_or_default(), n)
-                            });
+                            let (tracks, num_tracks) = dnd_resolver::resolve_dnd(self.state.clone(), data).await;
 
                             // TODO: do all at once instead of waiting for each
                             for t in tracks {
