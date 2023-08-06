@@ -123,14 +123,18 @@ struct DragState {
     id: Option<usize>,
     x: i32,
     y: i32,
-    dnd: bool,
-    released: bool,
 }
 impl DragState {
     fn with_id(mut self, id: usize) -> Self {
         self.id = Some(id);
         self
     }
+}
+
+#[derive(Default)]
+struct DndState {
+    dnd: bool,
+    released: bool,
 }
 
 type UiTx = tokio::sync::mpsc::UnboundedSender<UIEvent>;
@@ -240,36 +244,44 @@ impl UIThread {
     }
 
     fn run(&mut self) {
+        fn handle_window(
+            win: &mut DoubleWindow,
+            modal: bool,
+            maybe_id: Option<usize>,
+            e: Arc<RwLock<AllWindowEdges>>,
+        ) {
+            let mut drag_state = DragState::default();
+            if let Some(id) = maybe_id {
+                drag_state = drag_state.with_id(id);
+            }
+
+            let mut dnd_state = DndState::default();
+
+            win.handle(move |w, ev| {
+                // handlers return true if the event was handled
+                // so we can chain them together conveniently
+                handle_window_misc(w, ev)
+                    || (!modal && handle_volume_scroll(w, ev))
+                    || (!modal && handle_window_drag(w, ev, &mut drag_state, e.clone()))
+                    || (!modal && handle_window_dnd(w, ev, &mut dnd_state))
+            })
+        }
+
         let mut edges_state = AllWindowEdges::default();
         edges_state.update_window(0, &self.gui.main_win);
         edges_state.update_window(1, &self.queue_gui.main_win);
         edges_state.update_window(2, &self.connection_gui.main_win);
 
-        let edges_lock = Arc::new(RwLock::new(edges_state));
+        let e = Arc::new(RwLock::new(edges_state));
 
-        let mut ds = DragState::default().with_id(0);
-        let edges = edges_lock.clone();
-        self.gui
-            .main_win
-            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
+        handle_window(&mut self.gui.main_win, false, Some(0), e.clone());
+        handle_window(&mut self.queue_gui.main_win, false, Some(1), e.clone());
+        handle_window(&mut self.connection_gui.main_win, false, Some(2), e.clone());
+        handle_window(&mut self.prefs_gui.main_win, true, None, e.clone());
 
-        let mut ds = DragState::default().with_id(1);
-        let edges = edges_lock.clone();
-        self.queue_gui
-            .main_win
-            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
-
-        let mut ds = DragState::default().with_id(2);
-        let edges = edges_lock.clone();
-        self.connection_gui
-            .main_win
-            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
-
-        let mut ds = DragState::default();
-        let edges = edges_lock.clone();
-        self.prefs_gui
-            .main_win
-            .handle(move |w, ev| Self::handle_window_event(&mut ds, edges.clone(), w, ev));
+        // i made the name short so it doesnt autoformat the lines above on to multiple lines
+        // but also it probably shouldnt be in scope as `e` so (lol?)
+        drop(e);
 
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
@@ -590,209 +602,227 @@ impl UIThread {
             "<not connected>".to_string()
         }
     }
+}
 
-    fn handle_window_event(
-        state: &mut DragState,
-        edges: Arc<RwLock<AllWindowEdges>>,
-        w: &mut DoubleWindow,
-        ev: Event,
-    ) -> bool {
-        match ev {
-            fltk::enums::Event::Push => {
-                let coords = app::event_coords();
-                state.x = coords.0;
-                state.y = coords.1;
+fn handle_window_drag(
+    w: &mut DoubleWindow,
+    ev: Event,
+    state: &mut DragState,
+    edges: Arc<RwLock<AllWindowEdges>>,
+) -> bool {
+    match ev {
+        fltk::enums::Event::Push => {
+            let coords = app::event_coords();
+            state.x = coords.0;
+            state.y = coords.1;
 
-                true
-            }
-            fltk::enums::Event::Drag => {
-                // to only drag on title bar:
-                //if y < 20 { logic } else return false
+            true
+        }
+        fltk::enums::Event::Drag => {
+            // to only drag on title bar:
+            //if y < 20 { logic } else return false
 
-                let mut x = app::event_x_root() - state.x;
-                let mut y = app::event_y_root() - state.y;
+            let mut x = app::event_x_root() - state.x;
+            let mut y = app::event_y_root() - state.y;
 
-                if let Some(id) = state.id {
-                    let edges = edges.blocking_read();
+            if let Some(id) = state.id {
+                let edges = edges.blocking_read();
 
-                    let width = w.width();
-                    let height = w.height();
+                let width = w.width();
+                let height = w.height();
 
-                    let my_left = x;
-                    let my_right = x + w.width();
-                    let my_top = y;
-                    let my_bottom = y + w.height(); //..
+                let my_left = x;
+                let my_right = x + w.width();
+                let my_top = y;
+                let my_bottom = y + w.height(); //..
 
-                    let threshold = 16;
+                let threshold = 16;
 
-                    let valid_edges = edges
-                        .0
-                        .iter()
-                        .enumerate()
-                        // don't snap to ourself
-                        .filter_map(|(i, o)| if i == id { None } else { Some(o) });
+                let valid_edges = edges
+                    .0
+                    .iter()
+                    .enumerate()
+                    // don't snap to ourself
+                    .filter_map(|(i, o)| if i == id { None } else { Some(o) });
 
-                    let mut left_right_edges = valid_edges
-                        .clone()
-                        // don't snap if we're not actually near enough in the other direction
-                        .filter(|o| {
-                            // we know the 2 pairs of left and right bounds so check if they overlap
-                            //
-                            //     - (currently dragging)
-                            //     |
-                            //     | - (the other one) (maybe)
-                            //     | |
-                            //     - |
-                            //       |
-                            //       -
+                let mut left_right_edges = valid_edges
+                    .clone()
+                    // don't snap if we're not actually near enough in the other direction
+                    .filter(|o| {
+                        // we know the 2 pairs of left and right bounds so check if they overlap
+                        //
+                        //     - (currently dragging)
+                        //     |
+                        //     | - (the other one) (maybe)
+                        //     | |
+                        //     - |
+                        //       |
+                        //       -
 
-                            (my_top > o.top && my_top < o.bottom)
-                                || (my_bottom > o.top && my_bottom < o.bottom)
-                                || (o.top > my_top && o.top < my_bottom)
-                                || (o.bottom > my_top && o.bottom < my_bottom)
-                        })
-                        .flat_map(|o| {
-                            [
-                                // if our right is near their left, set our left to their left - our width
-                                ((o.left - my_right).abs(), o.left - width),
-                                // if our left is near their right, set our left to their right
-                                ((o.right - my_left).abs(), o.right),
-                            ]
-                            .into_iter()
-                        })
-                        .chain(
-                            valid_edges
-                                .clone()
-                                .filter(|o| {
-                                    // if we are slightly under or above them, we want to snap to the inside left/right
-                                    ((my_top - o.bottom).abs() < threshold)
-                                        || ((o.top - my_bottom).abs() < threshold)
-                                })
-                                .flat_map(|o| {
-                                    [
-                                        ((my_left - o.left).abs(), o.left),
-                                        ((my_right - o.right).abs(), o.right - width),
-                                    ]
-                                    .into_iter()
-                                }),
-                        )
-                        .collect::<Vec<(i32, i32)>>();
+                        (my_top > o.top && my_top < o.bottom)
+                            || (my_bottom > o.top && my_bottom < o.bottom)
+                            || (o.top > my_top && o.top < my_bottom)
+                            || (o.bottom > my_top && o.bottom < my_bottom)
+                    })
+                    .flat_map(|o| {
+                        [
+                            // if our right is near their left, set our left to their left - our width
+                            ((o.left - my_right).abs(), o.left - width),
+                            // if our left is near their right, set our left to their right
+                            ((o.right - my_left).abs(), o.right),
+                        ]
+                        .into_iter()
+                    })
+                    .chain(
+                        valid_edges
+                            .clone()
+                            .filter(|o| {
+                                // if we are slightly under or above them, we want to snap to the inside left/right
+                                ((my_top - o.bottom).abs() < threshold)
+                                    || ((o.top - my_bottom).abs() < threshold)
+                            })
+                            .flat_map(|o| {
+                                [
+                                    ((my_left - o.left).abs(), o.left),
+                                    ((my_right - o.right).abs(), o.right - width),
+                                ]
+                                .into_iter()
+                            }),
+                    )
+                    .collect::<Vec<(i32, i32)>>();
 
-                    // snap to the nearest one
-                    left_right_edges.sort();
-                    if let Some(edge) = left_right_edges.first() {
-                        if edge.0 < threshold {
-                            x = edge.1;
-                        }
-                    }
-
-                    let mut top_bottom_edges = valid_edges
-                        .clone()
-                        .filter(|o| {
-                            // |----------|
-                            //       |--------|
-                            (my_left > o.left && my_left < o.right)
-                                || (my_right > o.left && my_right < o.right)
-                                || (o.left > my_left && o.left < my_right)
-                                || (o.right > my_left && o.right < my_right)
-                        })
-                        .flat_map(|o| {
-                            [
-                                // if our bottom is near their top, set our top to their top - our height
-                                ((o.top - my_bottom).abs(), o.top - height),
-                                // if our top is near their bottom, set our top to their bottom
-                                ((o.bottom - my_top).abs(), o.bottom),
-                            ]
-                            .into_iter()
-                        })
-                        .chain(
-                            valid_edges
-                                .clone()
-                                .filter(|o| {
-                                    // if we are slightly left or right of them, we want to snap to the inside top/bottom
-                                    ((my_left - o.right).abs() < threshold)
-                                        || ((o.left - my_right).abs() < threshold)
-                                })
-                                .flat_map(|o| {
-                                    [
-                                        ((my_top - o.top).abs(), o.top),
-                                        ((my_bottom - o.bottom).abs(), o.bottom - height),
-                                    ]
-                                    .into_iter()
-                                }),
-                        )
-                        .collect::<Vec<(i32, i32)>>();
-
-                    top_bottom_edges.sort();
-                    if let Some(edge) = top_bottom_edges.first() {
-                        if edge.0 < threshold {
-                            y = edge.1;
-                        }
+                // snap to the nearest one
+                left_right_edges.sort();
+                if let Some(edge) = left_right_edges.first() {
+                    if edge.0 < threshold {
+                        x = edge.1;
                     }
                 }
 
-                w.set_pos(x, y);
+                let mut top_bottom_edges = valid_edges
+                    .clone()
+                    .filter(|o| {
+                        // |----------|
+                        //       |--------|
+                        (my_left > o.left && my_left < o.right)
+                            || (my_right > o.left && my_right < o.right)
+                            || (o.left > my_left && o.left < my_right)
+                            || (o.right > my_left && o.right < my_right)
+                    })
+                    .flat_map(|o| {
+                        [
+                            // if our bottom is near their top, set our top to their top - our height
+                            ((o.top - my_bottom).abs(), o.top - height),
+                            // if our top is near their bottom, set our top to their bottom
+                            ((o.bottom - my_top).abs(), o.bottom),
+                        ]
+                        .into_iter()
+                    })
+                    .chain(
+                        valid_edges
+                            .clone()
+                            .filter(|o| {
+                                // if we are slightly left or right of them, we want to snap to the inside top/bottom
+                                ((my_left - o.right).abs() < threshold)
+                                    || ((o.left - my_right).abs() < threshold)
+                            })
+                            .flat_map(|o| {
+                                [
+                                    ((my_top - o.top).abs(), o.top),
+                                    ((my_bottom - o.bottom).abs(), o.bottom - height),
+                                ]
+                                .into_iter()
+                            }),
+                    )
+                    .collect::<Vec<(i32, i32)>>();
 
-                if let Some(id) = state.id {
-                    let mut edges = edges.blocking_write();
-                    edges.update_window(id, w);
+                top_bottom_edges.sort();
+                if let Some(edge) = top_bottom_edges.first() {
+                    if edge.0 < threshold {
+                        y = edge.1;
+                    }
                 }
+            }
 
-                true
+            w.set_pos(x, y);
+
+            if let Some(id) = state.id {
+                let mut edges = edges.blocking_write();
+                edges.update_window(id, w);
             }
-            fltk::enums::Event::DndEnter => {
-                println!("blah");
-                state.dnd = true;
-                true
-            }
-            fltk::enums::Event::DndDrag => true,
-            fltk::enums::Event::DndRelease => {
-                state.released = true;
-                true
-            }
-            fltk::enums::Event::Paste => {
-                if state.dnd && state.released {
-                    ui_send!(UIEvent::DroppedFiles(app::event_text()));
-                    state.dnd = false;
-                    state.released = false;
-                    true
-                } else {
-                    println!("paste");
-                    false
-                }
-            }
-            fltk::enums::Event::DndLeave => {
+
+            true
+        }
+        _ => false,
+    }
+}
+
+fn handle_window_dnd(w: &mut DoubleWindow, ev: Event, state: &mut DndState) -> bool {
+    match ev {
+        fltk::enums::Event::DndEnter => {
+            println!("blah");
+            state.dnd = true;
+            true
+        }
+        fltk::enums::Event::DndDrag => true,
+        fltk::enums::Event::DndRelease => {
+            state.released = true;
+            true
+        }
+        fltk::enums::Event::Paste => {
+            if state.dnd && state.released {
+                ui_send!(UIEvent::DroppedFiles(app::event_text()));
                 state.dnd = false;
                 state.released = false;
                 true
+            } else {
+                println!("paste");
+                false
             }
-            fltk::enums::Event::MouseWheel => {
-                let dy = app::event_dy();
-                match dy {
-                    // uhhhhhhhh these are the opposite of what you'd think (???)
-                    app::MouseWheel::Up => {
-                        ui_send!(UIEvent::VolumeDown);
-                        true
-                    }
-                    app::MouseWheel::Down => {
-                        ui_send!(UIEvent::VolumeUp);
-                        true
-                    }
-                    _ => false,
-                }
-            }
-            fltk::enums::Event::Shortcut => {
-                let key = app::event_key();
-
-                if key == Key::Escape {
-                    // don't close the program (mark the event as handled)
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
         }
+        fltk::enums::Event::DndLeave => {
+            state.dnd = false;
+            state.released = false;
+            true
+        }
+        _ => false,
+    }
+}
+
+fn handle_volume_scroll(w: &mut DoubleWindow, ev: Event) -> bool {
+    match ev {
+        fltk::enums::Event::MouseWheel => {
+            let dy = app::event_dy();
+            match dy {
+                // uhhhhhhhh these are the opposite of what you'd think (???)
+                app::MouseWheel::Up => {
+                    ui_send!(UIEvent::VolumeDown);
+                    true
+                }
+                app::MouseWheel::Down => {
+                    ui_send!(UIEvent::VolumeUp);
+                    true
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn handle_window_misc(w: &mut DoubleWindow, ev: Event) -> bool {
+    match ev {
+        fltk::enums::Event::Shortcut => {
+            let key = app::event_key();
+
+            if key == Key::Escape {
+                // don't close the program (mark the event as handled)
+                true
+            } else {
+                false
+            }
+        }
+        _ => false,
     }
 }
 
