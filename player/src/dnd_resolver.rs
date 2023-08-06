@@ -87,6 +87,7 @@ pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<Track>
             .collect()
     };
 
+    // wait for all tasks to finish and filter for successful reads
     let mut tracks = join_all(tasks)
         .await
         .into_iter()
@@ -96,15 +97,16 @@ pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<Track>
         })
         .collect::<Vec<Track>>();
 
+    // sort tracks by album and track number
     tracks.sort_by_key(|t| {
-        let s = t.metadata.track_no.clone().unwrap_or_default();
-        let n = s
+        let track_no_string = t.metadata.track_no.clone().unwrap_or_default();
+        let track_no = track_no_string
             .split('/')
             .next()
             .unwrap()
             .parse::<usize>()
             .unwrap_or_default();
-        (t.metadata.album.clone().unwrap_or_default(), n)
+        (t.metadata.album.clone().unwrap_or_default(), track_no)
     });
 
     (tracks, num_tracks)
