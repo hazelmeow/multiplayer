@@ -366,12 +366,12 @@ impl AudioReader {
             }
         }
 
-        let x = self.encoder.encode_vec_float(&pcm, 256).unwrap();
+        let opus_data = self.encoder.encode_vec_float(&pcm, 256).unwrap();
         self.position += 1;
 
         Ok(AudioFrame {
             frame: self.position as u32,
-            data: x,
+            data: opus_data,
         })
     }
 
@@ -534,9 +534,8 @@ impl TransmitThread {
     fn handle_command(&mut self, cmd: TransmitCommand) {
         match cmd {
             TransmitCommand::Stop => {
-                // TODO: do we need to send a stop to somewhere (network or audio)?
-
                 let _ = self.exit_tx.send(());
+                self.paused = true;
             }
             TransmitCommand::PauseState(p) => {
                 self.paused = p;

@@ -341,11 +341,18 @@ impl ConnectionActor {
             }
 
             Message::PlaybackCommand(command) => match command {
-                PlaybackCommand::Play => todo!(),
-                PlaybackCommand::Pause => todo!(),
-                PlaybackCommand::Stop => todo!(),
-                PlaybackCommand::Next => todo!(),
-                PlaybackCommand::Prev => todo!(),
+                PlaybackCommand::Stop | PlaybackCommand::Next | PlaybackCommand::Prev => {
+                    let state = self.state.write().await;
+                    let room = state.connection.as_ref().unwrap().room.as_ref().unwrap();
+
+                    if let Some(transmit) = &room.transmit_thread {
+                        let _ = transmit.send(TransmitCommand::Stop);
+                    }
+
+                    let _ = self.audio.send(AudioCommand::Clear);
+                }
+                PlaybackCommand::Play => {}
+                PlaybackCommand::Pause => {}
             },
 
             Message::AudioData(data) => {

@@ -105,9 +105,9 @@ impl Player {
     }
 
     pub fn clear(&mut self) {
-        println!("clearing playback buffer");
         self.buffer.lock().unwrap().clear();
         self.frames_received = 0;
+        self.pause();
     }
 
     pub fn finish(&mut self) -> bool {

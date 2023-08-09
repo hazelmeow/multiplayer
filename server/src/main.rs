@@ -472,15 +472,8 @@ async fn handle_message(
             let mut state = state.lock().await;
             let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
 
-            if room.playback_state != PlaybackState::Stopped {
-                if let Some(current_track) = room.queue.get(room.current_track as usize) {
-                    if current_track.owner != peer.id {
-                        // someone else is actively transmitting, forward to them?
-                    }
-                }
-            }
-
-            // TODO: optimistically do something on the client side?
+            // tell everyone so they can clear their buffers
+            room.broadcast(&Message::PlaybackCommand(*command)).await;
 
             match command {
                 PlaybackCommand::Play => {
