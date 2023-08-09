@@ -139,15 +139,14 @@ impl Player {
     }
     pub fn get_visualizer_buffer(&mut self) -> Option<[f32; 4096]> {
         let buf = self.buffer.lock().unwrap();
-        let copied = buf.as_slices();
 
         let mut sbuf = [0.0; 4096];
-        if copied.0.len() > sbuf.len() {
-            for (i, s) in copied.0.iter().step_by(2).enumerate() {
+        if buf.len() > sbuf.len() {
+            for (i, s) in buf.iter().step_by(2).enumerate() {
                 if i >= sbuf.len() {
                     break;
                 }
-                let summed = s + copied.0[i + 1] / 2.0;
+                let summed = s + buf.iter().nth(i + 1).unwrap() / 2.0;
                 sbuf[i] = summed;
             }
             Some(sbuf)
