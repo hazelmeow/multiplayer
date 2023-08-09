@@ -524,7 +524,7 @@ async fn handle_message(
 
                     if let Some(idx) = current_idx {
                         let new_idx = match command {
-                            PlaybackCommand::Prev => idx.overflowing_sub(1).0,
+                            PlaybackCommand::Prev => idx.saturating_sub(1),
                             PlaybackCommand::Next => idx + 1,
                             _ => unreachable!(),
                         };
