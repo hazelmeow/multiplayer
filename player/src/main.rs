@@ -393,7 +393,7 @@ impl MainThread {
 
 #[derive(Debug, Clone)]
 pub enum AudioStatus {
-    Elapsed(f32),
+    Elapsed(usize),
     Buffering(bool),
     Finished,
     Visualizer([u8; 14]),

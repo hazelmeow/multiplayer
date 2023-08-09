@@ -287,7 +287,7 @@ impl ConnectionActor {
                                 PlaybackState::Stopped => 0.0,
                             };
 
-                            ui_update!(UIUpdateEvent::SetTime(elapsed, total));
+                            ui_update!(UIUpdateEvent::SetTime(elapsed as f32, total));
                         }
                         AudioStatus::Buffering(is_buffering) => {
                             let mut s = self.state.write().await;

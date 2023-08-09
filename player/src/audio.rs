@@ -127,12 +127,18 @@ impl Player {
     }
 
     pub fn is_ready(&self) -> bool {
+        const SECONDS: usize = 1;
+
         let buffer = self.buffer.lock().unwrap();
-        buffer.len() > 48000 * 2 // 2s...
+        buffer.len() > 48000 * 2 * SECONDS // 1s of stereo 48k
     }
-    pub fn get_seconds_elapsed(&self) -> f32 {
-        // num frames * samples per frame / sample rate
-        (self.frames_received as f32) * 480.0 / 48000.0
+    pub fn get_seconds_elapsed(&self) -> usize {
+        const SECONDS: usize = 1;
+
+        // 960 = 2 channels * 480 samples per frame
+        let samples_received = self.frames_received * 480;
+        let current_sample = samples_received.saturating_sub(48000 * SECONDS);
+        current_sample.max(0) / 48000
     }
     pub fn fake_frames_received(&mut self, frames: usize) {
         self.frames_received = frames;
@@ -273,6 +279,7 @@ impl AudioThread {
                         }
 
                         self.p.receive(frame.data);
+
                         if let Some(samples) = self.p.get_visualizer_buffer() {
                             let bars = calculate_visualizer(&samples);
                             let _ = self.tx.send(AudioStatus::Visualizer(bars));
@@ -308,7 +315,7 @@ impl AudioThread {
                 }
 
                 AudioCommand::Clear => {
-                    let _ = self.tx.send(AudioStatus::Elapsed(0.0));
+                    let _ = self.tx.send(AudioStatus::Elapsed(0));
                     self.p.clear();
                 }
                 AudioCommand::Volume(val) => {
