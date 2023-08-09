@@ -66,11 +66,13 @@ pub(crate) use ui_update;
 // only temporary
 #[derive(Debug, Clone)]
 pub enum UIEvent {
-    BtnPlay, // bleh
+    // handled by main thread
+    BtnPlay,
     BtnStop,
     BtnPause,
     BtnNext,
     BtnPrev,
+
     BtnQueue,
     BtnOpenConnectionDialog,
     Connect(Server),
@@ -79,8 +81,6 @@ pub enum UIEvent {
     VolumeUp,
     VolumeDown,
     DroppedFiles(String),
-    Stop,
-    Pause,
     HideQueue,
     HideConnectionWindow,
     HidePrefsWindow,
@@ -320,16 +320,16 @@ impl UIThread {
                         ConnectionDlgEvent::AddServer(_) => todo!(),
                         _ => {}
                     },
+
+                    // handled by main thread
                     UIEvent::BtnPlay => {
                         // play button behaviour:
                         // if stopped and queue is empty, ask for file
                         // if stopped and queue has songs, tell it to play
                         // if already playing, do nothing
                     }
-                    UIEvent::BtnStop => {
-                        ui_send!(UIEvent::Stop);
-                    }
                     UIEvent::BtnPause => {}
+                    UIEvent::BtnStop => {}
                     UIEvent::BtnNext => {}
                     UIEvent::BtnPrev => {}
 
@@ -375,7 +375,13 @@ impl UIThread {
             UIUpdateEvent::SetTime(elapsed, total) => {
                 // TODO: switch between elapsed and remaining on there
                 self.gui.lbl_time.set_label(&min_secs(elapsed));
-                let progress = elapsed / total;
+                let progress = {
+                    if total == 0.0 {
+                        0.0
+                    } else {
+                        elapsed / total
+                    }
+                };
                 self.gui.seek_bar.set_value(progress as f64);
             }
             UIUpdateEvent::Visualizer(bars) => {
@@ -435,20 +441,9 @@ impl UIThread {
                 if let Some(c) = &s.connection {
                     if let Some(r) = &c.room {
                         // TODO: metadata stuff here is TOO LONG AND ANNOYING
-                        if let Some(track) = &r.playing {
+                        // TODO: probably isnt correct wrt pause/stop here either
+                        if let Some(track) = &r.current_track() {
                             let name = r.connected_users.get(&track.owner);
-
-                            let line = format!(
-                                "@b{}\t[{}] {}",
-                                name.unwrap_or(&"?".into()),
-                                min_secs(track.metadata.duration),
-                                track
-                                    .metadata
-                                    .title
-                                    .as_ref()
-                                    .unwrap_or(&"[no title]".to_string())
-                            );
-                            self.queue_gui.queue_browser.add(&line);
 
                             // also update display
                             self.gui.lbl_title.set_text(
@@ -470,10 +465,12 @@ impl UIThread {
 
                             if let Some(art) = &track.metadata.art {
                                 if let Err(err) = match art {
-                                    TrackArt::Jpeg(data) => JpegImage::from_data(data).map(|img| {
-                                        self.gui.art_frame.set_image(Some(img));
-                                        self.gui.art_frame.redraw();
-                                    }),
+                                    TrackArt::Jpeg(data) => {
+                                        JpegImage::from_data(&data).map(|img| {
+                                            self.gui.art_frame.set_image(Some(img));
+                                            self.gui.art_frame.redraw();
+                                        })
+                                    }
                                 } {
                                     eprintln!("failed to load image: {:?}", err);
                                 }
@@ -482,11 +479,18 @@ impl UIThread {
                                 self.gui.art_frame.redraw();
                             }
                         }
+
                         for track in &r.queue {
                             let name = r.connected_users.get(&track.owner);
 
+                            let bold = if r.current_track == track.id {
+                                "@b"
+                            } else {
+                                ""
+                            };
+
                             let line = format!(
-                                "{}\t[{}] {}",
+                                "{bold}{}\t[{}] {}",
                                 name.unwrap_or(&"?".into()),
                                 min_secs(track.metadata.duration),
                                 track
@@ -547,22 +551,18 @@ impl UIThread {
     }
 
     fn get_play_status(&self) -> PlayStatusIcon {
-        // i love duplicated logic ^-^
         let state = self.state.blocking_read();
 
-        if let Some(connection) = &state.connection {
-            if let Some(r) = &connection.room {
-                if let Some(t) = &r.playing {
-                    if t.owner == state.my_id {
-                        // todo: pause?
-                        return PlayStatusIcon::PlayTx;
-                    } else {
-                        return PlayStatusIcon::PlayRx;
-                    }
-                }
-            }
+        // i love shared and reusable logic ^-^
+        if state.is_stopped() {
+            PlayStatusIcon::Stop
+        } else if state.is_paused() {
+            PlayStatusIcon::Pause
+        } else if state.is_transmitter() {
+            PlayStatusIcon::PlayTx
+        } else {
+            PlayStatusIcon::PlayRx
         }
-        PlayStatusIcon::Stop
     }
 
     fn get_status(&self) -> String {
@@ -582,7 +582,9 @@ impl UIThread {
                     return "Buffering...".to_string();
                 }
 
-                if let Some(t) = &r.playing {
+                // TODO: this probably doesnt handle pause/stop states properly yet
+
+                if let Some(t) = r.current_track() {
                     if t.owner == state.my_id {
                         return "Playing (transmitting)".to_string();
                     } else {
@@ -592,9 +594,9 @@ impl UIThread {
                             name.unwrap_or(&"?".to_string())
                         );
                     }
-                } else {
-                    return format!("Connected to {}/{}", connection.server.addr, r.name);
                 }
+
+                return format!("Connected to {}/{}", connection.server.addr, r.name);
             }
 
             format!("Connected to {}", connection.server.addr)

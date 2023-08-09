@@ -1,29 +1,25 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use connection::{ConnectionActor, ConnectionActorHandle};
-use key::Key;
-use preferences::Preferences;
 use tokio::sync::RwLock;
 
+mod audio;
 mod connection;
+mod dnd_resolver;
+mod gui;
 mod key;
 mod preferences;
-use crate::preferences::Server;
-
 mod transmit;
-use crate::transmit::TransmitCommand;
 
-mod audio;
 use crate::audio::AudioCommand;
-
-mod gui;
+use crate::connection::{ConnectionActor, ConnectionActorHandle};
 use crate::gui::connection_window::ServerStatus;
 use crate::gui::{ui_update, ConnectionDlgEvent, UIEvent, UIThread, UIUpdateEvent};
+use crate::key::Key;
+use crate::preferences::{Preferences, Server};
+use crate::transmit::TransmitThreadHandle;
 
-mod dnd_resolver;
-
-use protocol::{RoomOptions, Track};
+use protocol::{Message, PlaybackCommand, PlaybackState, RoomOptions, Track};
 
 async fn maybe_connection_exited(maybe_actor: &Option<ConnectionActorHandle>) -> Option<()> {
     match maybe_actor {
@@ -58,6 +54,7 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct State {
     my_id: String,
     key: Key,
@@ -69,11 +66,13 @@ pub struct State {
     loading_count: usize,
 }
 
+#[derive(Debug)]
 pub struct ConnectionState {
     server: Server,
     room: Option<RoomState>,
 }
 
+#[derive(Debug)]
 pub struct RoomState {
     id: u32,
     name: String,
@@ -85,49 +84,47 @@ pub struct RoomState {
 
     buffering: bool,
 
-    playing: Option<Track>,
     queue: VecDeque<Track>,
+    current_track: u32,
+    playback_state: PlaybackState,
+
     connected_users: HashMap<String, String>,
+
+    transmit_thread: Option<TransmitThreadHandle>,
 }
 
 impl State {
-    fn is_connected(&self) -> bool {
-        if let Some(c) = &self.connection {
-            return true;
-        }
-        false
+    fn current_track(&self) -> Option<&Track> {
+        let Some(connection) = &self.connection else { return None };
+        let Some(room) = &connection.room else { return None };
+        room.current_track()
     }
-    fn is_in_room(&self) -> bool {
-        if let Some(c) = &self.connection {
-            if let Some(r) = &c.room {
-                return true;
-            }
-        }
-        false
+
+    fn is_transmitter(&self) -> bool {
+        self.current_track()
+            .map_or(false, |t| t.owner == self.my_id)
     }
-    fn is_transmitting(&self) -> bool {
-        if let Some(c) = &self.connection {
-            if let Some(r) = &c.room {
-                if let Some(p) = &r.playing {
-                    if p.owner == self.my_id {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+
+    /// Checks if playback is stopped.
+    /// Returns true if not in a server or room.
+    fn is_stopped(&self) -> bool {
+        let Some(connection) = &self.connection else { return true };
+        let Some(room) = &connection.room else { return true };
+        room.playback_state == PlaybackState::Stopped
     }
-    fn is_receiving(&self) -> bool {
-        if let Some(c) = &self.connection {
-            if let Some(r) = &c.room {
-                if let Some(p) = &r.playing {
-                    if p.owner != self.my_id {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+
+    /// Checks if playback is paused.
+    /// Returns false if not in a server or room.
+    fn is_paused(&self) -> bool {
+        let Some(connection) = &self.connection else { return false };
+        let Some(room) = &connection.room else { return false };
+        room.playback_state == PlaybackState::Paused
+    }
+}
+
+impl RoomState {
+    fn current_track(&self) -> Option<&Track> {
+        self.queue.iter().find(|t| t.id == self.current_track)
     }
 }
 
@@ -161,7 +158,7 @@ impl MainThread {
             connection: None,
         }));
 
-        let (ui_rx) = UIThread::spawn(state.clone());
+        let ui_rx = UIThread::spawn(state.clone());
 
         ui_update!(UIUpdateEvent::Volume(volume));
 
@@ -261,20 +258,52 @@ impl MainThread {
                             }
                         }
 
+                        UIEvent::BtnPlay => {
+                            let Some(conn) = self.connection.as_mut() else { continue };
+                            let s = self.state.read().await;
+                            //if s.is_transmitter() {
+                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Play));
+                            //} else {
+                                conn.send(Message::PlaybackCommand(PlaybackCommand::Play));
+                            //}
+                        }
+                        UIEvent::BtnStop => {
+                            let Some(conn) = self.connection.as_mut() else { continue };
+                            let s = self.state.read().await;
+                            //if s.is_transmitter() {
+                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Stop));
+                            //} else {
+                                conn.send(Message::PlaybackCommand(PlaybackCommand::Stop));
+                            //}
+                        }
+                        UIEvent::BtnPause => {
+                            let Some(conn) = self.connection.as_mut() else { continue };
+                            let s = self.state.read().await;
+                            //if s.is_transmitter() {
+                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Pause));
+                            //} else {
+                                conn.send(Message::PlaybackCommand(PlaybackCommand::Pause));
+                            //}
+                        }
                         UIEvent::BtnNext => {
                             let Some(conn) = self.connection.as_mut() else { continue };
                             let s = self.state.read().await;
-                            if s.is_transmitting() {
-                                conn.transmit.send(TransmitCommand::Stop).unwrap();
-                            }
+                            //if s.is_transmitter() {
+                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Next));
+                            //} else {
+                                conn.send(Message::PlaybackCommand(PlaybackCommand::Next));
+                            //}
                         }
-                        UIEvent::BtnPause => {
-                            // TODO UNDO ME
-                            self.disconnect().await;
+                        UIEvent::BtnPrev => {
+                            let Some(conn) = self.connection.as_mut() else { continue };
+                            let s = self.state.read().await;
+                            //if s.is_transmitter() {
+                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Prev));
+                            //} else {
+                                conn.send(Message::PlaybackCommand(PlaybackCommand::Prev));
+                            //}
                         }
-                        UIEvent::Stop => {
-                            // TODO do this obviously
-                        }
+
                         UIEvent::VolumeSlider(pos) => {
                             self.volume = pos;
                             self.try_update_volume();

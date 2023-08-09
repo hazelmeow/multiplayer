@@ -15,12 +15,19 @@ pub enum AudioData {
     Start,
     Frame(AudioFrame),
     Finish,
-    Resume,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct TrackRequest {
+    pub path: Vec<u8>,
+    pub metadata: TrackMetadata,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Track {
+    pub id: u32,
     pub owner: String,
+
     pub path: Vec<u8>,
     pub metadata: TrackMetadata,
 }
@@ -66,14 +73,37 @@ pub enum Message {
 
     Notification(Notification),
 
+    PlaybackCommand(PlaybackCommand),
+
     Request { request_id: u32, data: Request },
     Response { request_id: u32, data: Response },
 }
 
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlaybackCommand {
+    Play,
+    Pause,
+    Stop,
+    Prev,
+    Next,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlaybackState {
+    Stopped,
+    Playing,
+    Paused,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Notification {
-    Playing(Option<Track>),
-    Queue(VecDeque<Track>),
+    // all 3 of these should be changed together on the client
+    Queue {
+        maybe_queue: Option<VecDeque<Track>>,
+        maybe_current_track: Option<u32>,
+        maybe_playback_state: Option<PlaybackState>,
+    },
+
     ConnectedUsers(HashMap<String, String>),
     Room(Option<RoomListing>),
     RoomList(Vec<RoomListing>),
@@ -88,7 +118,7 @@ pub enum Request {
     LeaveRoom,
     CreateRoom(RoomOptions),
 
-    QueuePush(Track),
+    QueuePush(TrackRequest),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

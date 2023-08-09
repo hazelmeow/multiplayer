@@ -11,7 +11,8 @@ use tokio::sync::{mpsc, Mutex};
 
 use protocol::network::FrameStream;
 use protocol::{
-    AudioData, Message, Notification, Request, Response, RoomListing, RoomOptions, Track,
+    AudioData, Message, Notification, PlaybackCommand, PlaybackState, Request, Response,
+    RoomListing, RoomOptions, Track,
 };
 
 #[tokio::main(flavor = "multi_thread")]
@@ -48,8 +49,11 @@ type Id = String;
 struct Room {
     name: String,
 
-    playing: Option<Track>,
+    next_track: u32,
+
     queue: VecDeque<Track>,
+    current_track: u32,
+    playback_state: PlaybackState,
 
     peers: HashMap<Id, PeerHandle>,
 }
@@ -59,11 +63,20 @@ impl Room {
         Room {
             name: options.name,
 
-            playing: None,
+            next_track: 0,
+
             queue: VecDeque::new(),
+            current_track: 0,
+            playback_state: PlaybackState::Stopped,
 
             peers: HashMap::new(),
         }
+    }
+
+    fn next_track_id(&mut self) -> u32 {
+        let track_id = self.next_track;
+        self.next_track += 1;
+        track_id
     }
 
     async fn broadcast(&mut self, message: &Message) {
@@ -88,12 +101,12 @@ impl Room {
         }
     }
 
-    fn playing_notification(&self) -> Notification {
-        Notification::Playing(self.playing.clone())
-    }
-
-    fn queue_notification(&self) -> Notification {
-        Notification::Queue(self.queue.clone())
+    fn queue_notification(&self, queue: bool, pos: bool, state: bool) -> Notification {
+        Notification::Queue {
+            maybe_queue: queue.then(|| self.queue.clone()),
+            maybe_current_track: pos.then_some(self.current_track),
+            maybe_playback_state: state.then_some(self.playback_state),
+        }
     }
 
     fn connected_users_notification(&self, mut names: HashMap<Id, String>) -> Notification {
@@ -103,7 +116,7 @@ impl Room {
 
     fn room_users(&self, mut names: HashMap<Id, String>) -> Vec<String> {
         names.retain(|id, _| self.peers.contains_key(id));
-        names.keys().into_iter().map(|x| x.to_owned()).collect()
+        names.keys().map(|x| x.to_owned()).collect()
     }
 }
 
@@ -127,6 +140,12 @@ impl Shared {
 
             names: HashMap::new(),
         }
+    }
+
+    fn next_room_id(&mut self) -> u32 {
+        let room_id = self.next_room;
+        self.next_room += 1;
+        room_id
     }
 
     async fn notify(&mut self, notification: Notification) {
@@ -359,8 +378,8 @@ async fn join_room(
         user_names: room.room_users(names2),
     })))
     .await?;
-    peer.notify(room.playing_notification()).await?;
-    peer.notify(room.queue_notification()).await?;
+    peer.notify(room.queue_notification(true, true, true))
+        .await?;
 
     let room_list = state.room_list_notification();
     state.notify(room_list).await;
@@ -449,6 +468,80 @@ async fn handle_message(
             }
         }
 
+        Message::PlaybackCommand(command) => {
+            let mut state = state.lock().await;
+            let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
+
+            if room.playback_state != PlaybackState::Stopped {
+                if let Some(current_track) = room.queue.get(room.current_track as usize) {
+                    if current_track.owner != peer.id {
+                        // someone else is actively transmitting, forward to them?
+                    }
+                }
+            }
+
+            // TODO: optimistically do something on the client side?
+
+            match command {
+                PlaybackCommand::Play => {
+                    if room.playback_state != PlaybackState::Playing {
+                        room.playback_state = PlaybackState::Playing;
+                        room.notify(room.queue_notification(false, false, true))
+                            .await;
+                    }
+
+                    Ok(())
+                }
+                PlaybackCommand::Pause => {
+                    if room.playback_state == PlaybackState::Playing {
+                        room.playback_state = PlaybackState::Paused;
+                        room.notify(room.queue_notification(false, false, true))
+                            .await;
+                    } else if room.playback_state == PlaybackState::Paused {
+                        room.playback_state = PlaybackState::Playing;
+                        room.notify(room.queue_notification(false, false, true))
+                            .await;
+                    }
+
+                    Ok(())
+                }
+                PlaybackCommand::Stop => {
+                    if room.playback_state != PlaybackState::Stopped {
+                        room.playback_state = PlaybackState::Stopped;
+                        room.notify(room.queue_notification(false, false, true))
+                            .await;
+                    }
+
+                    Ok(())
+                }
+                PlaybackCommand::Prev | PlaybackCommand::Next => {
+                    let current_idx = room
+                        .queue
+                        .iter()
+                        .enumerate()
+                        .find(|(_, track)| track.id == room.current_track)
+                        .map(|(idx, _)| idx);
+
+                    if let Some(idx) = current_idx {
+                        let new_idx = match command {
+                            PlaybackCommand::Prev => idx.overflowing_sub(1).0,
+                            PlaybackCommand::Next => idx + 1,
+                            _ => unreachable!(),
+                        };
+
+                        if let Some(new_track) = room.queue.get(new_idx) {
+                            room.current_track = new_track.id;
+
+                            room.notify(room.queue_notification(false, true, false))
+                                .await;
+                        }
+                    }
+
+                    Ok(())
+                }
+            }
+        }
+
         Message::AudioData(data) => {
             match data {
                 protocol::AudioData::Frame(_) => {} // dont log
@@ -460,34 +553,40 @@ async fn handle_message(
             let mut state = state.lock().await;
             let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };
 
-            match data {
-                // intercept Finish in case we want to actually just start the next song instead
-                AudioData::Finish => {
-                    let next_track = room.queue.pop_front();
-                    if let Some(track) = next_track {
-                        // we have a new track to play, don't send the finish method anywhere
-                        // this is REALLY silly maybe?
-                        room.playing = Some(track);
+            // TODO check that the correct person is sending this
 
-                        // send playing and queue state
-                        let p = room.playing_notification();
-                        room.broadcast(&Message::Notification(p)).await;
-                        let q = room.queue_notification();
-                        room.broadcast(&Message::Notification(q)).await;
+            match data {
+                AudioData::Finish => {
+                    let current_pos = room
+                        .queue
+                        .iter()
+                        .enumerate()
+                        .find(|(_, track)| track.id == room.current_track)
+                        .map(|(idx, _)| idx);
+
+                    let Some(current_pos) = current_pos else {
+						eprintln!("current track not found in queue");
+						return Ok(())
+					};
+
+                    let maybe_track = room.queue.get(current_pos + 1);
+                    if let Some(t) = maybe_track {
+                        room.current_track = t.id;
                     } else {
                         // the track finished and we have nothing else to play
                         // send playing state
-                        room.playing = None;
-                        let p = room.playing_notification();
-                        room.broadcast(&Message::Notification(p)).await;
-
-                        // broadcast a finish method to everyone
-                        room.broadcast(&Message::AudioData(AudioData::Finish)).await;
+                        room.playback_state = PlaybackState::Stopped;
                     }
+
+                    // rebroadcast Finish message
+                    room.broadcast_others(peer, m).await;
+
+                    room.notify(room.queue_notification(false, true, true))
+                        .await;
                 }
                 _ => {
                     // resend other messages to all other peers
-                    room.broadcast_others(&peer, &m).await;
+                    room.broadcast_others(peer, m).await;
                 }
             }
 
@@ -536,8 +635,7 @@ async fn handle_request(
         Request::CreateRoom(options) => {
             let mut state = state.lock().await;
 
-            let room_id = state.next_room;
-            state.next_room += 1;
+            let room_id = state.next_room_id();
 
             let room = Room::new(options.clone());
             state.rooms.insert(room_id, room);
@@ -577,20 +675,27 @@ async fn handle_request(
             Err(e) => Err(e),
         },
 
-        Request::QueuePush(track) => {
+        Request::QueuePush(track_request) => {
             let mut state = state.lock().await;
             let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(Some(Response::Success(false))) };
 
-            // just play it now
-            if room.playing.is_none() {
-                room.playing = Some(track.to_owned());
-
-                room.notify(room.playing_notification()).await;
-            } else {
-                room.queue.push_back(track.to_owned());
+            if room.queue.is_empty() {
+                room.playback_state = PlaybackState::Playing;
             }
 
-            room.notify(room.queue_notification()).await;
+            let track = Track {
+                id: room.next_track_id(),
+                owner: peer.id.clone(),
+
+                path: track_request.path.clone(),
+                metadata: track_request.metadata.clone(),
+            };
+
+            room.queue.push_back(track.to_owned());
+
+            // notify of what could've changed
+            room.notify(room.queue_notification(true, false, true))
+                .await;
 
             Ok(Some(Response::Success(true)))
         }

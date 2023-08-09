@@ -221,7 +221,7 @@ pub struct AudioThreadHandle {
 }
 
 impl AudioThreadHandle {
-    pub fn send(&mut self, cmd: AudioCommand) -> Result<(), mpsc::error::SendError<AudioCommand>> {
+    pub fn send(&self, cmd: AudioCommand) -> Result<(), mpsc::error::SendError<AudioCommand>> {
         self.tx.send(cmd)
     }
 }
@@ -301,9 +301,6 @@ impl AudioThread {
                         }
                         self.p.pause();
                         let _ = self.tx.send(AudioStatus::Finished);
-                    }
-                    AudioData::Resume => {
-                        self.p.resume();
                     }
                 },
                 AudioCommand::StartLate(frame_id) => {

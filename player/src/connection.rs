@@ -11,32 +11,36 @@ use tokio::{
     time::timeout,
 };
 
-use protocol::{network::FrameStream, RoomListing};
-use protocol::{AudioData, Message, Notification, Request, Response, RoomOptions, Track};
+use protocol::{network::FrameStream, PlaybackCommand, PlaybackState, RoomListing, TrackRequest};
+use protocol::{AudioData, Message, Notification, Request, Response, RoomOptions};
 
 use crate::{
     audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
     gui::{connection_window::ServerStatus, ui_update, UIUpdateEvent},
     preferences::Server,
-    transmit::{TransmitCommand, TransmitThread, TransmitThreadHandle},
+    transmit::{TransmitCommand, TransmitThread},
     AudioStatus, ConnectionState, RoomState, State,
 };
 
-// ew
 #[derive(Debug)]
-pub enum Command {
+pub enum NetworkCommand {
+    /// Send a request over the network and receive a response
     Request(Request, oneshot::Sender<Response>),
+
+    /// Send a message over the network
     Plain(Message),
+
+    /// Receive a message as if it was from the server
+    FakeReceive(Message),
 }
 
 // !Clone even though it should be probably since it's a handle??
 // ideally we only want it in one place so we can drop it nicely
 pub struct ConnectionActorHandle {
     // need references to these in other places
-    pub transmit: TransmitThreadHandle,
     pub audio: AudioThreadHandle,
 
-    tx: mpsc::UnboundedSender<Command>,
+    tx: mpsc::UnboundedSender<NetworkCommand>,
 }
 
 impl ConnectionActorHandle {
@@ -44,9 +48,13 @@ impl ConnectionActorHandle {
         self.tx.closed().await
     }
 
-    // maybe we don't make this pub and make methods?? or maybe that's unnecessary
-    fn send(&mut self, msg: Message) -> Result<(), Box<dyn Error>> {
-        let _ = self.tx.send(Command::Plain(msg))?;
+    pub fn fake_receive(&mut self, msg: Message) -> Result<(), Box<dyn Error>> {
+        self.tx.send(NetworkCommand::FakeReceive(msg))?;
+        Ok(())
+    }
+
+    pub fn send(&mut self, msg: Message) -> Result<(), Box<dyn Error>> {
+        self.tx.send(NetworkCommand::Plain(msg))?;
         Ok(())
     }
 
@@ -59,13 +67,13 @@ impl ConnectionActorHandle {
         let (send, recv) = oneshot::channel::<Response>();
 
         // TODO: timeout
-        let _ = self.tx.send(Command::Request(data, send))?;
+        self.tx.send(NetworkCommand::Request(data, send))?;
 
         let duration = std::time::Duration::from_millis(1000);
         if let Ok(result) = timeout(duration, recv).await {
             Ok(result?)
         } else {
-            return Err("request timed out".into());
+            Err("request timed out".into())
         }
     }
 
@@ -106,7 +114,7 @@ impl ConnectionActorHandle {
             _ => Err("got the wrong response".into()),
         }
     }
-    pub async fn queue_push(&self, track: Track) -> Result<bool, Box<dyn Error>> {
+    pub async fn queue_push(&self, track: TrackRequest) -> Result<bool, Box<dyn Error>> {
         let r = self.send_request(Request::QueuePush(track)).await?;
         match r {
             Response::Success(s) => Ok(s),
@@ -122,12 +130,11 @@ pub struct ConnectionActor {
 
     state: Arc<RwLock<State>>,
 
-    transmit: TransmitThreadHandle,
     audio: AudioThreadHandle,
-    audio_data_rx: mpsc::UnboundedReceiver<AudioData>,
     audio_status_rx: AudioStatusRx,
 
-    rx: mpsc::UnboundedReceiver<Command>,
+    tx: mpsc::UnboundedSender<NetworkCommand>,
+    rx: mpsc::UnboundedReceiver<NetworkCommand>,
 }
 
 impl ConnectionActor {
@@ -140,38 +147,21 @@ impl ConnectionActor {
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<AudioCommand>();
         let (audio_status_tx, audio_status_rx) = mpsc::unbounded_channel::<AudioStatus>();
 
-        let (audio_data_tx, audio_data_rx) = mpsc::unbounded_channel::<AudioData>();
-
-        let (transmit_tx, transmit_rx) = mpsc::unbounded_channel::<TransmitCommand>();
-        let transmit = TransmitThread::spawn(transmit_tx, transmit_rx, audio_data_tx, &audio_tx);
-
         let audio = AudioThread::spawn(audio_tx, audio_rx, &audio_status_tx);
 
         let state2 = state.clone();
-        let transmit2 = transmit.clone();
         let audio2 = audio.clone();
+        let tx2 = tx.clone();
 
         tokio::spawn(async move {
-            let mut t = ConnectionActor::new(
-                state2,
-                server,
-                transmit2,
-                audio2,
-                audio_data_rx,
-                audio_status_rx,
-                rx,
-            )
-            .await
-            // TODO
-            .expect("failed to authenticate or something");
+            let mut t = ConnectionActor::new(state2, server, audio2, audio_status_rx, tx2, rx)
+                .await
+                // TODO
+                .expect("failed to authenticate or something");
             t.run().await;
         });
 
-        let handle = ConnectionActorHandle {
-            transmit,
-            audio,
-            tx,
-        };
+        let handle = ConnectionActorHandle { audio, tx };
 
         // do required connection stuff first
 
@@ -200,11 +190,10 @@ impl ConnectionActor {
     pub async fn new(
         state: Arc<RwLock<State>>,
         server: Server,
-        transmit: TransmitThreadHandle,
         audio: AudioThreadHandle,
-        audio_data_rx: mpsc::UnboundedReceiver<AudioData>,
         audio_status_rx: AudioStatusRx,
-        rx: mpsc::UnboundedReceiver<Command>,
+        tx: mpsc::UnboundedSender<NetworkCommand>,
+        rx: mpsc::UnboundedReceiver<NetworkCommand>,
     ) -> Result<Self, tokio::io::Error> {
         let tcp_stream = TcpStream::connect(&server.addr).await?;
         let stream = FrameStream::new(tcp_stream);
@@ -218,11 +207,10 @@ impl ConnectionActor {
             next_id: 0,
             pending: HashMap::new(),
 
-            transmit,
             audio,
-            audio_data_rx,
             audio_status_rx,
 
+            tx,
             rx,
         })
     }
@@ -236,7 +224,7 @@ impl ConnectionActor {
                 result = self.rx.recv() => {
                     match result {
                         Some(command) => match command {
-                            Command::Request(data, sender) => {
+                            NetworkCommand::Request(data, sender) => {
                                 let id = self.next_id;
                                 self.next_id += 1;
 
@@ -245,8 +233,12 @@ impl ConnectionActor {
                                 self.stream.send(&Message::Request { request_id: id, data }).await.unwrap();
                             }
 
-                            Command::Plain(message) => {
+                            NetworkCommand::Plain(message) => {
                                 self.stream.send(&message).await.unwrap();
+                            }
+
+                            NetworkCommand::FakeReceive(message) => {
+                                self.handle_message(message).await;
                             }
                         }
                         // channel closed or all senders have been dropped
@@ -280,11 +272,6 @@ impl ConnectionActor {
                     }
                 }
 
-                // received audiodata from audio
-                Some(data) = self.audio_data_rx.recv() => {
-                    self.stream.send(&Message::AudioData(data)).await.unwrap();
-                }
-
                 // received a status from audio
                 Some(msg) = self.audio_status_rx.recv() => {
                     match msg {
@@ -293,12 +280,13 @@ impl ConnectionActor {
                             let conn = s.connection.as_ref().unwrap();
                             let room = conn.room.as_ref().expect("lol");
 
-                            let total = match &room.playing {
-                                Some(t) => {
-                                    t.metadata.duration
+                            let total = match &room.playback_state {
+                                PlaybackState::Playing | PlaybackState::Paused => {
+                                    s.current_track().expect("weird state").metadata.duration
                                 },
-                                None => 0.0
+                                PlaybackState::Stopped => 0.0,
                             };
+
                             ui_update!(UIUpdateEvent::SetTime(elapsed, total));
                         }
                         AudioStatus::Buffering(is_buffering) => {
@@ -331,8 +319,11 @@ impl ConnectionActor {
         // we could also drop their handles everywhere which drops the sender
         //     and then the receiver returns None and the actor should exit itself?
         //     and it could clean up there?
-        self.transmit.send(TransmitCommand::Shutdown).unwrap();
         self.audio.send(AudioCommand::Shutdown).unwrap();
+
+        // TODO: lets try just dropping the handle?
+        // we could get it from the state and send it a shutdown tho
+        // self.transmit.send(TransmitCommand::Shutdown).unwrap();
     }
 
     async fn handle_message(&mut self, message: Message) {
@@ -348,6 +339,14 @@ impl ConnectionActor {
                     None => println!("got a response with an unknown request_id?"),
                 }
             }
+
+            Message::PlaybackCommand(command) => match command {
+                PlaybackCommand::Play => todo!(),
+                PlaybackCommand::Pause => todo!(),
+                PlaybackCommand::Stop => todo!(),
+                PlaybackCommand::Next => todo!(),
+                PlaybackCommand::Prev => todo!(),
+            },
 
             Message::AudioData(data) => {
                 match data {
@@ -405,38 +404,95 @@ impl ConnectionActor {
 
     async fn handle_notification(&mut self, notification: Notification) {
         let mut state = self.state.write().await;
+
+        // TODO: this is a hack lol
+        let my_id = state.my_id.clone();
+        let key = state.key.clone();
+
         let mut conn = state.connection.as_mut().unwrap();
 
         match notification {
-            Notification::Queue(queue) => {
-                // println!("got queue: {:?}", queue);
+            Notification::Queue {
+                maybe_queue,
+                maybe_current_track,
+                maybe_playback_state,
+            } => {
+                let mut room = conn
+                    .room
+                    .as_mut()
+                    .expect("got notification but we arent in a room o_O"); // lol
 
-                let mut room = conn.room.as_mut().expect("lol");
-                room.queue = queue;
+                if let Some(queue) = maybe_queue {
+                    room.queue = queue;
+                }
+                if let Some(current_track) = maybe_current_track {
+                    room.current_track = current_track;
+                }
+                if let Some(playback_state) = maybe_playback_state {
+                    room.playback_state = playback_state;
+                }
 
-                ui_update!(UIUpdateEvent::QueueChanged);
-                ui_update!(UIUpdateEvent::Status);
-            }
-            Notification::Playing(playing) => {
-                // println!("got playing: {:?}", playing);
-
-                let mut room = conn.room.as_mut().expect("lol");
-                room.playing = playing.clone();
-
-                if let Some(t) = playing {
-                    if t.owner == state.my_id {
-                        let path = state.key.decrypt_path(t.path).unwrap();
-                        self.transmit
-                            .send(TransmitCommand::Start(path.into()))
-                            .unwrap();
+                let should_transmit = {
+                    if room.playback_state == PlaybackState::Stopped {
+                        None
+                    } else if let Some(current_track) = room.current_track() {
+                        if current_track.owner == my_id {
+                            Some((current_track.id, current_track.path.clone()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
                     }
+                };
+
+                if let Some(transmit) = &room.transmit_thread {
+                    // we're transmitting something, check if we should keep/replace it
+                    if let Some((track_id, track_path)) = should_transmit {
+                        if transmit.track_id != track_id {
+                            // we were transmitting the wrong thing, replace the transmitter
+                            let path = key.decrypt_path(track_path).unwrap();
+                            room.transmit_thread = Some(TransmitThread::spawn(
+                                track_id,
+                                path.into(),
+                                self.tx.clone(),
+                                self.audio.clone(),
+                            ));
+                        }
+                    } else {
+                        // we're not supposed to be transmitting
+                        // drop the thread
+                        room.transmit_thread = None;
+                    }
+                } else {
+                    // no transmit thread active, maybe make one
+                    if let Some((track_id, track_path)) = should_transmit {
+                        let path = key.decrypt_path(track_path).unwrap();
+                        room.transmit_thread = Some(TransmitThread::spawn(
+                            track_id,
+                            path.into(),
+                            self.tx.clone(),
+                            self.audio.clone(),
+                        ));
+                    }
+                }
+
+                if let Some(transmit) = &room.transmit_thread {
+                    transmit
+                        .send(TransmitCommand::PauseState(
+                            room.playback_state == PlaybackState::Paused,
+                        ))
+                        .unwrap();
                 }
 
                 ui_update!(UIUpdateEvent::QueueChanged);
                 ui_update!(UIUpdateEvent::Status);
             }
             Notification::ConnectedUsers(list) => {
-                let mut room = conn.room.as_mut().expect("lol");
+                let mut room = conn
+                    .room
+                    .as_mut()
+                    .expect("got notification but we arent in a room o_O");
                 room.connected_users = list;
 
                 ui_update!(UIUpdateEvent::UserListChanged);
@@ -447,11 +503,13 @@ impl ConnectionActor {
                         conn.room = Some(RoomState {
                             id: room.id,
                             name: room.name,
-                            playing: None,
                             queue: VecDeque::new(),
+                            current_track: 0,
+                            playback_state: PlaybackState::Stopped,
                             connected_users: HashMap::new(),
                             is_synced: false,
                             buffering: false,
+                            transmit_thread: None,
                         })
                     }
                     None => {

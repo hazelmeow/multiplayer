@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::{error::Error, fs};
 
@@ -8,8 +9,15 @@ use aes_gcm_siv::{
 
 use crate::preferences;
 
+#[derive(Clone)]
 pub struct Key {
     cipher: Aes256GcmSiv,
+}
+
+impl Debug for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Key").finish_non_exhaustive()
+    }
 }
 
 impl Key {
@@ -46,7 +54,7 @@ impl Key {
         self.cipher.encrypt(nonce, path.as_bytes())
     }
 
-    pub fn decrypt_path(&self, data: Vec<u8>) -> Result<String, aes_gcm_siv::Error> {
+    pub fn decrypt_path<T: AsRef<[u8]>>(&self, data: T) -> Result<String, aes_gcm_siv::Error> {
         let nonce = Nonce::from_slice(b"12bytestring");
 
         let decrypted = self

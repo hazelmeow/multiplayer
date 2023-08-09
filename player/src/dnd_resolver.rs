@@ -2,8 +2,9 @@ use std::sync::Arc;
 use std::{fs::read_dir, path::PathBuf};
 
 use futures::future::join_all;
-use protocol::Track;
 use tokio::sync::RwLock;
+
+use protocol::TrackRequest;
 
 use crate::{
     gui::{ui_update, UIUpdateEvent},
@@ -11,7 +12,7 @@ use crate::{
     State,
 };
 
-pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<Track>, usize) {
+pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<TrackRequest>, usize) {
     let mut frontier: Vec<PathBuf> = data
         .split('\n')
         .map(|p| PathBuf::from(p.trim().replace("file://", "")))
@@ -51,7 +52,7 @@ pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<Track>
         ui_update!(UIUpdateEvent::Status);
     }
 
-    let tasks: Vec<tokio::task::JoinHandle<Option<Track>>> = {
+    let tasks: Vec<tokio::task::JoinHandle<Option<TrackRequest>>> = {
         let s = state.read().await;
 
         track_paths
@@ -59,15 +60,13 @@ pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<Track>
             .map(|p| {
                 let file_string = p.as_os_str().to_string_lossy();
                 let encrypted_path = s.key.encrypt_path(&file_string.to_string()).unwrap();
-                let my_id = s.my_id.clone();
 
                 tokio::spawn(async move {
                     match AudioInfoReader::load(&p) {
                         Ok(mut reader) => match reader.read_info() {
                             Ok((_, _, metadata)) => {
-                                let track = protocol::Track {
+                                let track = protocol::TrackRequest {
                                     path: encrypted_path,
-                                    owner: my_id,
                                     metadata,
                                 };
                                 Some(track)
@@ -95,7 +94,7 @@ pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<Track>
             Ok(Some(t)) => Some(t),
             _ => None,
         })
-        .collect::<Vec<Track>>();
+        .collect::<Vec<TrackRequest>>();
 
     // sort tracks by album and track number
     tracks.sort_by_key(|t| {

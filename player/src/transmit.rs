@@ -16,10 +16,11 @@ use symphonia::core::probe::{Hint, ProbeResult};
 use tokio::sync::mpsc;
 use tokio::time::Interval;
 
-use protocol::{AudioData, TrackArt};
+use protocol::{AudioData, Message, TrackArt};
 use protocol::{AudioFrame, TrackMetadata};
 
-use crate::audio::AudioTx;
+use crate::audio::AudioThreadHandle;
+use crate::connection::NetworkCommand;
 use crate::AudioCommand;
 
 pub struct AudioInfoReader {
@@ -29,7 +30,7 @@ pub struct AudioInfoReader {
 }
 
 impl AudioInfoReader {
-    pub fn load(path: &PathBuf) -> Result<Self, Box<dyn Error>> {
+    pub fn load(path: &PathBuf) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let filename = path
             .file_name()
             .unwrap_or_default()
@@ -72,7 +73,9 @@ impl AudioInfoReader {
         })
     }
 
-    pub fn read_info(&mut self) -> Result<(u32, usize, TrackMetadata), Box<dyn Error>> {
+    pub fn read_info(
+        &mut self,
+    ) -> Result<(u32, usize, TrackMetadata), Box<dyn Error + Send + Sync>> {
         // read 1 packet to check the sample rate and channel count
 
         let decoded = loop {
@@ -221,7 +224,7 @@ pub struct AudioReader {
 }
 
 impl AudioReader {
-    pub fn load(path: &PathBuf) -> Result<Self, Box<dyn Error>> {
+    pub fn load(path: &PathBuf) -> Result<Self, Box<dyn Error + Send + Sync>> {
         let mut info_reader = AudioInfoReader::load(path)?;
 
         let (sample_rate, channel_count, _) = info_reader.read_info()?;
@@ -302,7 +305,7 @@ impl AudioReader {
         let samples_needed = if self.sample_rate != 48000 {
             self.resampler.input_frames_next()
         } else {
-            480 as usize
+            480
         };
 
         while self.source_buffer[0].len() < samples_needed {
@@ -343,7 +346,7 @@ impl AudioReader {
                     samples_correct_rate[1].chunks(1)
                 }
             })
-            .flat_map(|(a, b)| a.into_iter().chain(b))
+            .flat_map(|(a, b)| a.iter().chain(b))
             .copied()
             .collect();
 
@@ -356,13 +359,10 @@ impl AudioReader {
         let mut pcm = [0.0; PCM_LENGTH];
 
         match self.resample_more() {
-            Ok(resampled) => {
-                for i in 0..PCM_LENGTH {
-                    pcm[i] = resampled[i];
-                }
-            }
+            Ok(resampled) => pcm[..PCM_LENGTH].copy_from_slice(&resampled[..PCM_LENGTH]),
             Err(e) => {
                 println!("failed to encode frame: {:?}", e);
+                // TODO: do something with this error
             }
         }
 
@@ -378,32 +378,27 @@ impl AudioReader {
     pub fn finished(&self) -> bool {
         self.finished
     }
-
-    pub fn set_finished(&mut self) {
-        self.finished = true;
-    }
 }
 
 #[derive(Debug, Clone)]
 pub enum TransmitCommand {
-    Start(PathBuf),
     Stop,
-    Shutdown,
+    PauseState(bool),
 }
 
 pub type TransmitTx = mpsc::UnboundedSender<TransmitCommand>;
 pub type TransmitRx = mpsc::UnboundedReceiver<TransmitCommand>;
 
-type NetworkAudioTx = mpsc::UnboundedSender<AudioData>;
-
-#[derive(Clone)]
+#[derive(Debug)]
 pub struct TransmitThreadHandle {
+    pub track_id: u32,
+
     tx: TransmitTx,
 }
 
 impl TransmitThreadHandle {
     pub fn send(
-        &mut self,
+        &self,
         cmd: TransmitCommand,
     ) -> Result<(), mpsc::error::SendError<TransmitCommand>> {
         self.tx.send(cmd)
@@ -411,136 +406,165 @@ impl TransmitThreadHandle {
 }
 
 pub struct TransmitThread {
-    rx: TransmitRx,
-    network_audio_tx: NetworkAudioTx,
-    audio_tx: AudioTx,
+    track_id: u32,
+    paused: bool,
 
-    audio_reader: Option<AudioReader>,
+    audio_reader: AudioReader,
     interval: Interval,
+
+    // receive TransmitCommands
+    rx: TransmitRx,
+
+    // send AudioData to network and self
+    network_tx: mpsc::UnboundedSender<NetworkCommand>,
+    audio: AudioThreadHandle,
+
+    // interrupt own loop
+    exit_tx: mpsc::UnboundedSender<()>,
+    exit_rx: mpsc::UnboundedReceiver<()>,
 }
 
 impl TransmitThread {
     // pass in the channel parts because we need to create all the channels before spawning threads
     // since they depend on each other...
     pub fn spawn(
-        transmit_tx: TransmitTx,
-        transmit_rx: TransmitRx,
-        network_audio_tx: NetworkAudioTx,
-        audio_tx: &AudioTx,
+        track_id: u32,
+        track_path: PathBuf,
+        network_tx: mpsc::UnboundedSender<NetworkCommand>,
+        audio: AudioThreadHandle,
     ) -> TransmitThreadHandle {
-        let network_audio_tx = network_audio_tx.to_owned();
-        let audio_tx = audio_tx.to_owned();
+        let (transmit_tx, transmit_rx) = mpsc::unbounded_channel();
 
         tokio::spawn(async move {
-            let mut t = TransmitThread::new(transmit_rx, network_audio_tx, audio_tx);
-            t.run().await;
+            let thread = TransmitThread::new(track_id, track_path, transmit_rx, network_tx, audio);
+            match thread {
+                Ok(mut t) => {
+                    t.run().await;
+                }
+                Err(e) => {
+                    eprintln!("error while spawning transmit thread: {:?}", e);
+                }
+            }
         });
 
-        TransmitThreadHandle { tx: transmit_tx }
+        TransmitThreadHandle {
+            track_id,
+
+            tx: transmit_tx,
+        }
     }
 
-    fn new(rx: TransmitRx, network_audio_tx: NetworkAudioTx, audio_tx: AudioTx) -> Self {
+    fn new(
+        track_id: u32,
+        track_path: PathBuf,
+        rx: TransmitRx,
+        network_tx: mpsc::UnboundedSender<NetworkCommand>,
+        audio: AudioThreadHandle,
+    ) -> Result<Self, Box<dyn Error + Send + Sync>> {
+        let (exit_tx, exit_rx) = mpsc::unbounded_channel();
+
+        let audio_reader = AudioReader::load(&track_path)?;
+
         // ok let's actually do the math for this
         // each frame is 960 samples
         // at 48k that means it's 20ms per frame
         // SO we need to send a frame at least every 20ms.
         // i think.................
         // LOL OK it's two frames idk why maybe because it's stereo interleaved??????
-        let interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        //
+        // CLARIFICATION : 1 frame is 960 samples but that's for 2 channels so 480 samples per channel per frame
+        // 480 samples / 48k sample rate = 10ms per frame
+        let interval = tokio::time::interval(tokio::time::Duration::from_millis(10));
 
-        TransmitThread {
-            rx,
-            network_audio_tx,
-            audio_tx,
+        let t = TransmitThread {
+            track_id,
+            paused: false,
 
-            audio_reader: None,
+            audio_reader,
             interval,
-        }
+
+            rx,
+
+            network_tx,
+            audio,
+
+            exit_tx,
+            exit_rx,
+        };
+
+        // TODO ?
+        t.send_both(AudioData::Start);
+
+        Ok(t)
     }
 
     fn send_both(&self, data: AudioData) {
-        self.audio_tx
+        self.audio
             .send(AudioCommand::AudioData(data.clone()))
             .unwrap();
-        self.network_audio_tx.send(data).unwrap();
+        self.network_tx
+            .send(NetworkCommand::Plain(Message::AudioData(data)))
+            .unwrap();
     }
 
     async fn run(&mut self) {
         loop {
             tokio::select! {
-                Some(cmd) = self.rx.recv() => {
-                    let should_continue = self.handle_command(cmd);
-                    if !should_continue { break }
+                result = self.rx.recv() => {
+                    match result {
+                        Some(cmd) => self.handle_command(cmd),
+
+                        // all txs were dropped
+                        None => break,
+                    }
                 },
+
+                _ = self.exit_rx.recv() => {
+                    break;
+                }
 
                 _ = self.interval.tick() => self.handle_tick(),
             }
         }
+
+        println!("transmit thread for {} exiting", self.track_id);
     }
 
-    fn handle_command(&mut self, cmd: TransmitCommand) -> bool {
+    // returns true if we should continue looping
+    fn handle_command(&mut self, cmd: TransmitCommand) {
         match cmd {
-            TransmitCommand::Start(path) => {
-                if self.audio_reader.is_some() {
-                    eprintln!("TransmitCommand::Start failed, already transmitting?");
-                    return true;
-                }
-
-                match AudioReader::load(&path) {
-                    Ok(r) => {
-                        self.audio_reader = Some(r);
-
-                        self.send_both(AudioData::Start);
-                    }
-                    Err(e) => {
-                        println!("failed to load {:?} while transmitting: {e}", path)
-                    }
-                }
-            }
             TransmitCommand::Stop => {
-                // see the other comment for why we don't send it directly to the audio thread
-                self.network_audio_tx.send(AudioData::Finish).unwrap();
+                // TODO: do we need to send a stop to somewhere (network or audio)?
 
-                self.audio_reader = None;
+                let _ = self.exit_tx.send(());
             }
-            TransmitCommand::Shutdown => return false,
+            TransmitCommand::PauseState(p) => {
+                self.paused = p;
+            }
         }
-
-        // don't end loop
-        return true;
     }
 
     fn handle_tick(&mut self) {
-        // TODO: only run the timer when we need it?
-        if let Some(t) = self.audio_reader.as_mut() {
-            for _ in 0..10 {
-                // if ran out in the middle of this "tick" of 20 frames
-                if t.finished() {
-                    break;
-                };
+        if self.paused {
+            return;
+        }
 
-                let f = t.encode_frame();
-                if let Ok(frame) = f {
-                    // borrow checker doesn't like self.send_both() here since we already borrow self or something
-                    let data = AudioData::Frame(frame);
-                    self.audio_tx
-                        .send(AudioCommand::AudioData(data.clone()))
-                        .unwrap();
-                    self.network_audio_tx.send(data).unwrap();
-                } else {
-                    break; // we're done i guess
-                }
-            }
+        // we encoded the entire file
+        if self.audio_reader.finished() {
+            // send to network and ourselves
+            self.send_both(AudioData::Finish);
 
-            // we encoded the entire file
-            if t.finished() {
-                // don't send AudioData::Finish to ourselves BECAUSE
-                // we only want the audio thread to get finish if there's nothing to play
-                // the server checks if something new is queued and intercepts the Finish message
-                self.network_audio_tx.send(AudioData::Finish).unwrap();
+            // shut down this transmitter
+            let _ = self.exit_tx.send(());
 
-                self.audio_reader = None;
-            };
+            return;
+        };
+
+        if let Ok(frame) = self.audio_reader.encode_frame() {
+            self.send_both(AudioData::Frame(frame));
+        } else {
+            // we're done i guess? or there was some other encoding error
+            // idk we should probably handle this
         }
     }
 }
