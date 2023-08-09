@@ -261,8 +261,8 @@ impl UIThread {
                 // handlers return true if the event was handled
                 // so we can chain them together conveniently
                 handle_window_misc(w, ev)
+                    || handle_window_drag(w, ev, &mut drag_state, e.clone())
                     || (!modal && handle_volume_scroll(w, ev))
-                    || (!modal && handle_window_drag(w, ev, &mut drag_state, e.clone()))
                     || (!modal && handle_window_dnd(w, ev, &mut dnd_state))
             })
         }
