@@ -12,7 +12,7 @@ use tokio::{
 };
 
 use protocol::{network::FrameStream, PlaybackCommand, PlaybackState, RoomListing, TrackRequest};
-use protocol::{AudioData, Message, Notification, Request, Response, RoomOptions};
+use protocol::{Message, Notification, Request, Response, RoomOptions};
 
 use crate::{
     audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
