@@ -15,6 +15,7 @@ use fltk::window::*;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
 
+use protocol::PlaybackState;
 use protocol::TrackArt;
 
 pub mod connection_window;
@@ -545,6 +546,7 @@ impl UIThread {
     fn update_status(&mut self) {
         let status = self.get_status();
         self.gui.status_field.set_label(&status);
+
         // and the little thingy too
         let play_status = self.get_play_status();
         self.gui.play_status.update(play_status);
@@ -582,24 +584,30 @@ impl UIThread {
                     return "Buffering...".to_string();
                 }
 
-                // TODO: this probably doesnt handle pause/stop states properly yet
+                if r.playback_state != PlaybackState::Stopped {
+                    if let Some(t) = r.current_track() {
+                        let verb = match r.playback_state {
+                            PlaybackState::Playing => "Playing",
+                            PlaybackState::Paused => "Paused",
+                            _ => unreachable!(),
+                        };
 
-                if let Some(t) = r.current_track() {
-                    if t.owner == state.my_id {
-                        return "Playing (transmitting)".to_string();
-                    } else {
-                        let name = r.connected_users.get(&t.owner);
-                        return format!(
-                            "Playing (receiving from {})",
-                            name.unwrap_or(&"?".to_string())
-                        );
+                        if t.owner == state.my_id {
+                            return format!("{verb} (transmitting)");
+                        } else {
+                            let name = r.connected_users.get(&t.owner);
+                            return format!(
+                                "{verb} (receiving from {})",
+                                name.unwrap_or(&"?".to_string())
+                            );
+                        }
                     }
                 }
 
-                return format!("Connected to {}/{}", connection.server.addr, r.name);
+                return format!("Connected to {}:{}", connection.server.name, r.name);
             }
 
-            format!("Connected to {}", connection.server.addr)
+            format!("Connected to {}", connection.server.name)
         } else {
             "<not connected>".to_string()
         }
