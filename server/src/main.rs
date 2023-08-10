@@ -481,6 +481,15 @@ async fn handle_message(
                         room.playback_state = PlaybackState::Playing;
                         room.notify(room.queue_notification(false, false, true))
                             .await;
+                    } else {
+                        // aleady playing
+                        // pretend we stopped playing and started again
+                        room.playback_state = PlaybackState::Stopped;
+                        room.notify(room.queue_notification(false, false, true))
+                            .await;
+                        room.playback_state = PlaybackState::Playing;
+                        room.notify(room.queue_notification(false, false, true))
+                            .await;
                     }
 
                     Ok(())
