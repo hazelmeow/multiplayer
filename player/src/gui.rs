@@ -522,19 +522,16 @@ impl UIThread {
     fn update_right_status(&mut self) {
         let s = self.state.blocking_read();
 
-        if let Some(c) = &s.connection {
-            if let Some(r) = &c.room {
-                self.gui.status_right_display.set_label(&format!(
-                    "U{:0>2} Q{:0>2}",
-                    r.connected_users.len(),
-                    r.queue.len() + 1,
-                ));
-            } else {
-                self.gui.status_right_display.set_label("U00 Q00");
-            }
-        } else {
-            self.gui.status_right_display.set_label("U00 Q00");
-        }
+        let (users, queue) = s
+            .connection
+            .as_ref()
+            .and_then(|c| c.room.as_ref())
+            .map(|r| (r.connected_users.len(), r.queue.len()))
+            .unwrap_or_default();
+
+        self.gui
+            .status_right_display
+            .set_label(&format!("U{:0>2} Q{:0>2}", users, queue));
     }
 
     // set status based on state and priorities
