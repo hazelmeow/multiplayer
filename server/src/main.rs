@@ -524,10 +524,12 @@ async fn handle_message(
 
                         if let Some(new_track) = room.queue.get(new_idx) {
                             room.current_track = new_track.id;
-
-                            room.notify(room.queue_notification(false, true, false))
-                                .await;
+                        } else {
+                            room.playback_state = PlaybackState::Stopped;
                         }
+
+                        room.notify(room.queue_notification(false, true, true))
+                            .await;
                     }
 
                     Ok(())
