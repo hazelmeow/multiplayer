@@ -325,7 +325,9 @@ impl AudioThread {
                 AudioCommand::Pause(paused) => {
                     self.paused = paused;
                     if paused {
-                        self.p.pause();
+                        if self.p.is_started() {
+                            self.p.pause();
+                        }
                     } else {
                         self.wants_play = true;
                     }
