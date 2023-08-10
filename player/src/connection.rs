@@ -485,11 +485,9 @@ impl ConnectionActor {
                 }
 
                 if let Some(transmit) = &room.transmit_thread {
-                    transmit
-                        .send(TransmitCommand::PauseState(
-                            room.playback_state == PlaybackState::Paused,
-                        ))
-                        .unwrap();
+                    let _ = transmit.send(TransmitCommand::PauseState(
+                        room.playback_state == PlaybackState::Paused,
+                    ));
                 }
 
                 ui_update!(UIUpdateEvent::QueueChanged);
