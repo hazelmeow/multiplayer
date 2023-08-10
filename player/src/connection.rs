@@ -347,6 +347,10 @@ impl ConnectionActor {
                 }
                 PlaybackCommand::Play => {}
                 PlaybackCommand::Pause => {}
+
+                PlaybackCommand::SeekTo(_) => {
+                    // TODO maybe
+                }
             },
 
             Message::AudioData(data) => {

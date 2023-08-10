@@ -277,6 +277,16 @@ impl MainThread {
                             conn.send(Message::PlaybackCommand(PlaybackCommand::Prev)).unwrap();
                         }
 
+                        UIEvent::SeekBar(progress) => {
+                            let Some(conn) = self.connection.as_mut() else { continue };
+
+                            let state = self.state.read().await;
+                            if let Some(track) = state.current_track() {
+                                let secs = track.metadata.duration * progress;
+                                conn.send(Message::PlaybackCommand(PlaybackCommand::SeekTo(secs))).unwrap();
+                            }
+                        }
+
                         UIEvent::VolumeSlider(pos) => {
                             self.volume = pos;
                             self.try_update_volume();

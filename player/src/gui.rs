@@ -81,6 +81,7 @@ pub enum UIEvent {
     VolumeSlider(f32),
     VolumeUp,
     VolumeDown,
+    SeekBar(f32),
     DroppedFiles(String),
     HideQueue,
     HideConnectionWindow,
@@ -379,7 +380,11 @@ impl UIThread {
                         elapsed / total
                     }
                 };
-                self.gui.seek_bar.set_value(progress as f64);
+
+                let dragging = self.gui.seek_bar_dragging.blocking_lock();
+                if !*dragging {
+                    self.gui.seek_bar.set_value(progress as f64);
+                }
             }
             UIUpdateEvent::Visualizer(bars) => {
                 self.gui.visualizer.update_values(bars);

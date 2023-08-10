@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use fltk::browser::*;
 use fltk::button::*;
 use fltk::enums::*;
@@ -7,6 +9,7 @@ use fltk::image::PngImage;
 use fltk::prelude::*;
 use fltk::valuator::*;
 use fltk::window::*;
+use tokio::sync::Mutex;
 
 use super::bitrate_bar::*;
 use super::marquee_label::*;
@@ -31,6 +34,8 @@ pub struct MainWindow {
     pub play_status: PlayStatus,
     pub volume_slider: HorSlider,
     pub art_frame: Frame,
+
+    pub seek_bar_dragging: Arc<Mutex<bool>>,
 }
 impl MainWindow {
     pub fn make_window() -> Self {
@@ -98,7 +103,27 @@ impl MainWindow {
         //let mut temp_input = Input::new(150, buttons_y, 120, 20, "");
         //main_win.add(&temp_input);
 
-        let seek_bar = HorNiceSlider::new(14, buttons_y - 35, 270, 24, "");
+        let seek_bar_dragging = Arc::new(Mutex::new(false));
+        let seek_bar_dragging2 = seek_bar_dragging.clone();
+
+        let mut seek_bar = HorNiceSlider::new(14, buttons_y - 35, 270, 24, "");
+        seek_bar.handle(move |sb, ev| match ev {
+            fltk::enums::Event::Push => {
+                let mut d = seek_bar_dragging2.blocking_lock();
+                *d = true;
+
+                true
+            }
+            fltk::enums::Event::Released => {
+                let mut d = seek_bar_dragging2.blocking_lock();
+                *d = false;
+
+                ui_send!(UIEvent::SeekBar(sb.value() as f32));
+
+                true
+            }
+            _ => false,
+        });
         main_win.add(&seek_bar);
 
         let mut status_field = Group::new(
@@ -202,6 +227,8 @@ impl MainWindow {
             play_status,
             volume_slider,
             art_frame,
+
+            seek_bar_dragging,
         };
         s.reset();
         s

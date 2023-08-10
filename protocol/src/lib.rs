@@ -79,13 +79,14 @@ pub enum Message {
     Response { request_id: u32, data: Response },
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug)]
 pub enum PlaybackCommand {
     Play,
     Pause,
     Stop,
     Prev,
     Next,
+    SeekTo(f32),
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]

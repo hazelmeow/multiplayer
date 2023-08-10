@@ -476,6 +476,12 @@ async fn handle_message(
             room.broadcast(&Message::PlaybackCommand(*command)).await;
 
             match command {
+                PlaybackCommand::SeekTo(secs) => {
+                    println!("seeking to {secs}");
+
+                    Ok(())
+                }
+
                 PlaybackCommand::Play => {
                     if room.playback_state != PlaybackState::Playing {
                         room.playback_state = PlaybackState::Playing;
