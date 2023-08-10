@@ -110,7 +110,6 @@ impl Player {
     pub fn clear(&mut self) {
         self.buffer.lock().unwrap().clear();
         self.last_frame = None;
-        self.pause();
     }
 
     pub fn finish(&mut self) -> bool {
@@ -211,6 +210,7 @@ pub enum AudioCommand {
     AudioData(AudioData),
     Clear,
     Volume(f32),
+    Pause(bool),
     Shutdown,
 }
 
@@ -233,8 +233,11 @@ impl AudioThreadHandle {
 pub struct AudioThread {
     rx: AudioRx,
     tx: AudioStatusTx,
+
     p: Player,
+
     wants_play: bool,
+    paused: bool,
 }
 
 impl AudioThread {
@@ -260,8 +263,11 @@ impl AudioThread {
         AudioThread {
             rx,
             tx,
+
             p: player,
+
             wants_play: false,
+            paused: false,
         }
     }
 
@@ -311,15 +317,25 @@ impl AudioThread {
                 AudioCommand::Clear => {
                     let _ = self.tx.send(AudioStatus::Elapsed(0));
                     self.p.clear();
+                    self.p.pause();
                 }
                 AudioCommand::Volume(val) => {
                     self.p.volume(val);
+                }
+                AudioCommand::Pause(paused) => {
+                    self.paused = paused;
+                    if paused {
+                        self.p.pause();
+                    } else {
+                        self.wants_play = true;
+                    }
                 }
                 AudioCommand::Shutdown => {
                     break;
                 }
             }
-            if self.p.is_ready() && self.wants_play {
+
+            if self.p.is_ready() && self.wants_play && !self.paused {
                 self.wants_play = false;
 
                 let _ = self.tx.send(AudioStatus::Buffering(false));

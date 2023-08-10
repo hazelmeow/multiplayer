@@ -450,6 +450,12 @@ impl ConnectionActor {
                     ));
                 }
 
+                self.audio
+                    .send(AudioCommand::Pause(
+                        room.playback_state == PlaybackState::Paused,
+                    ))
+                    .unwrap();
+
                 ui_update!(UIUpdateEvent::QueueChanged);
                 ui_update!(UIUpdateEvent::Status);
             }
