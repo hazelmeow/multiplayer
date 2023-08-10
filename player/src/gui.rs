@@ -323,12 +323,7 @@ impl UIThread {
                     },
 
                     // handled by main thread
-                    UIEvent::BtnPlay => {
-                        // play button behaviour:
-                        // if stopped and queue is empty, ask for file
-                        // if stopped and queue has songs, tell it to play
-                        // if already playing, do nothing
-                    }
+                    UIEvent::BtnPlay => {}
                     UIEvent::BtnPause => {}
                     UIEvent::BtnStop => {}
                     UIEvent::BtnNext => {}
