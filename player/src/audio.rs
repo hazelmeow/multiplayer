@@ -340,8 +340,8 @@ impl AudioThread {
         }
     }
 
-    async fn handle_command(&mut self, data: AudioCommand) {
-        match data {
+    async fn handle_command(&mut self, command: AudioCommand) {
+        match command {
             AudioCommand::AudioData(d) => match d {
                 AudioData::Frame(frame) => {
                     if frame.frame % 10 == 0 {
@@ -392,7 +392,7 @@ impl AudioThread {
             }
             AudioCommand::PlaybackState(state) => {
                 if state == PlaybackState::Stopped {
-                    if self.p.is_started() {
+                    if self.p.is_started() && self.finish_interval.is_none() {
                         self.p.pause();
                     }
                 } else {
