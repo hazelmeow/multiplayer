@@ -138,8 +138,9 @@ struct DndState {
     released: bool,
 }
 
-type UiTx = tokio::sync::mpsc::UnboundedSender<UIEvent>;
-type UiRx = tokio::sync::mpsc::UnboundedReceiver<UIEvent>;
+type UiTx = mpsc::UnboundedSender<UIEvent>;
+type UiRx = mpsc::UnboundedReceiver<UIEvent>;
+
 pub struct UIThread {
     app: App,
     receiver: Receiver<UIEvent>,
@@ -437,10 +438,7 @@ impl UIThread {
                 if let Some(c) = &s.connection {
                     if let Some(r) = &c.room {
                         // TODO: metadata stuff here is TOO LONG AND ANNOYING
-                        // TODO: probably isnt correct wrt pause/stop here either
                         if let Some(track) = &r.current_track() {
-                            let name = r.connected_users.get(&track.owner);
-
                             // also update display
                             self.gui.lbl_title.set_text(
                                 track
@@ -461,12 +459,10 @@ impl UIThread {
 
                             if let Some(art) = &track.metadata.art {
                                 if let Err(err) = match art {
-                                    TrackArt::Jpeg(data) => {
-                                        JpegImage::from_data(&data).map(|img| {
-                                            self.gui.art_frame.set_image(Some(img));
-                                            self.gui.art_frame.redraw();
-                                        })
-                                    }
+                                    TrackArt::Jpeg(data) => JpegImage::from_data(data).map(|img| {
+                                        self.gui.art_frame.set_image(Some(img));
+                                        self.gui.art_frame.redraw();
+                                    }),
                                 } {
                                     eprintln!("failed to load image: {:?}", err);
                                 }
@@ -512,9 +508,6 @@ impl UIThread {
             }
             UIUpdateEvent::ConnectionChanged => {
                 self.connection_gui.update_connected();
-            }
-            _ => {
-                dbg!(evt);
             }
         }
     }
@@ -759,7 +752,7 @@ fn handle_window_drag(
     }
 }
 
-fn handle_window_dnd(w: &mut DoubleWindow, ev: Event, state: &mut DndState) -> bool {
+fn handle_window_dnd(_w: &mut DoubleWindow, ev: Event, state: &mut DndState) -> bool {
     match ev {
         fltk::enums::Event::DndEnter => {
             println!("blah");
@@ -791,7 +784,7 @@ fn handle_window_dnd(w: &mut DoubleWindow, ev: Event, state: &mut DndState) -> b
     }
 }
 
-fn handle_volume_scroll(w: &mut DoubleWindow, ev: Event) -> bool {
+fn handle_volume_scroll(_w: &mut DoubleWindow, ev: Event) -> bool {
     match ev {
         fltk::enums::Event::MouseWheel => {
             let dy = app::event_dy();
@@ -812,17 +805,13 @@ fn handle_volume_scroll(w: &mut DoubleWindow, ev: Event) -> bool {
     }
 }
 
-fn handle_window_misc(w: &mut DoubleWindow, ev: Event) -> bool {
+fn handle_window_misc(_w: &mut DoubleWindow, ev: Event) -> bool {
     match ev {
         fltk::enums::Event::Shortcut => {
             let key = app::event_key();
 
-            if key == Key::Escape {
-                // don't close the program (mark the event as handled)
-                true
-            } else {
-                false
-            }
+            // don't close the program (return true -> mark the event as handled)
+            key == Key::Escape
         }
         _ => false,
     }

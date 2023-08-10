@@ -23,7 +23,10 @@ use protocol::{Message, PlaybackCommand, PlaybackState, RoomOptions, Track};
 
 async fn maybe_connection_exited(maybe_actor: &Option<ConnectionActorHandle>) -> Option<()> {
     match maybe_actor {
-        Some(actor) => Some(actor.exited().await),
+        Some(actor) => {
+            actor.exited().await;
+            Some(())
+        }
         None => None,
     }
 }
@@ -255,48 +258,23 @@ impl MainThread {
 
                         UIEvent::BtnPlay => {
                             let Some(conn) = self.connection.as_mut() else { continue };
-                            let s = self.state.read().await;
-                            //if s.is_transmitter() {
-                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Play));
-                            //} else {
-                                conn.send(Message::PlaybackCommand(PlaybackCommand::Play));
-                            //}
+                            conn.send(Message::PlaybackCommand(PlaybackCommand::Play)).unwrap();
                         }
                         UIEvent::BtnStop => {
                             let Some(conn) = self.connection.as_mut() else { continue };
-                            let s = self.state.read().await;
-                            //if s.is_transmitter() {
-                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Stop));
-                            //} else {
-                                conn.send(Message::PlaybackCommand(PlaybackCommand::Stop));
-                            //}
+                            conn.send(Message::PlaybackCommand(PlaybackCommand::Stop)).unwrap();
                         }
                         UIEvent::BtnPause => {
                             let Some(conn) = self.connection.as_mut() else { continue };
-                            let s = self.state.read().await;
-                            //if s.is_transmitter() {
-                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Pause));
-                            //} else {
-                                conn.send(Message::PlaybackCommand(PlaybackCommand::Pause));
-                            //}
+                            conn.send(Message::PlaybackCommand(PlaybackCommand::Pause)).unwrap();
                         }
                         UIEvent::BtnNext => {
                             let Some(conn) = self.connection.as_mut() else { continue };
-                            let s = self.state.read().await;
-                            //if s.is_transmitter() {
-                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Next));
-                            //} else {
-                                conn.send(Message::PlaybackCommand(PlaybackCommand::Next));
-                            //}
+                            conn.send(Message::PlaybackCommand(PlaybackCommand::Next)).unwrap();
                         }
                         UIEvent::BtnPrev => {
                             let Some(conn) = self.connection.as_mut() else { continue };
-                            let s = self.state.read().await;
-                            //if s.is_transmitter() {
-                            //    conn.fake_receive(Message::PlaybackCommand(PlaybackCommand::Prev));
-                            //} else {
-                                conn.send(Message::PlaybackCommand(PlaybackCommand::Prev));
-                            //}
+                            conn.send(Message::PlaybackCommand(PlaybackCommand::Prev)).unwrap();
                         }
 
                         UIEvent::VolumeSlider(pos) => {

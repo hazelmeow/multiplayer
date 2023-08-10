@@ -238,7 +238,7 @@ impl AudioReader {
                 window: rubato::WindowFunction::BlackmanHarris2,
             };
             SincFixedOut::<f32>::new(
-                48000 as f64 / sample_rate as f64,
+                48000_f64 / sample_rate as f64,
                 1.0,
                 params,
                 480,
