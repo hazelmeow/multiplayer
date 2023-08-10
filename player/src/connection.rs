@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     error::Error,
     sync::Arc,
+    time::Duration,
 };
 
 use futures::StreamExt;
@@ -514,12 +515,14 @@ pub async fn query_server(server: Server) -> ServerStatus {
     }
 }
 
-pub async fn query_room_list(addr: &str) -> Result<Vec<RoomListing>, Box<dyn Error + Send + Sync>> {
-    let duration = tokio::time::Duration::from_secs(1);
+const QUERY_TCP_TIMEOUT: Duration = Duration::from_secs(1);
+const QUERY_PROTOCOL_TIMEOUT: Duration = Duration::from_secs(1);
 
-    let tcp_stream = timeout(duration, TcpStream::connect(addr)).await??;
+pub async fn query_room_list(addr: &str) -> Result<Vec<RoomListing>, Box<dyn Error + Send + Sync>> {
+    let tcp_stream = timeout(QUERY_TCP_TIMEOUT, TcpStream::connect(addr)).await??;
     let mut stream = FrameStream::new(tcp_stream);
 
+    // send a handshake
     stream
         .send(&Message::Request {
             request_id: 88888888,
@@ -527,22 +530,24 @@ pub async fn query_room_list(addr: &str) -> Result<Vec<RoomListing>, Box<dyn Err
         })
         .await?;
 
-    while let Ok(Ok(Some(message))) = timeout(duration, stream.next_frame()).await {
+    // wait for a handshake response to send a room list query,
+    // then wait for the room list or time out if the server does not comply
+    while let Ok(Ok(Some(message))) = timeout(QUERY_PROTOCOL_TIMEOUT, stream.next_frame()).await {
         match message {
-            Message::Response { request_id, data } => match data {
-                Response::Handshake(hsr) => {
-                    if request_id != 88888888 || hsr != "nyaa" {
-                        return Err("invalid handshake".into());
-                    }
-
-                    stream.send(&Message::QueryRoomList).await.unwrap();
+            Message::Response {
+                request_id,
+                data: Response::Handshake(hsr),
+            } => {
+                if request_id != 88888888 || hsr != "nyaa" {
+                    return Err("invalid handshake".into());
                 }
-                _ => {}
-            },
-            Message::Notification(n) => match n {
-                Notification::RoomList(room_list) => return Ok(room_list),
-                _ => {}
-            },
+
+                stream.send(&Message::QueryRoomList).await.unwrap();
+            }
+            Message::Notification(Notification::RoomList(room_list)) => {
+                // we got what we were looking for, break
+                return Ok(room_list);
+            }
             _ => {}
         }
     }
