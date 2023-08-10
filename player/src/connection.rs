@@ -356,48 +356,7 @@ impl ConnectionActor {
             },
 
             Message::AudioData(data) => {
-                match data {
-                    protocol::AudioData::Frame(f) => {
-                        let state = self.state.read().await;
-                        let room = state.connection.as_ref().unwrap().room.as_ref().unwrap();
-
-                        if !room.is_synced {
-                            // lol
-                            drop(state);
-
-                            // we're late.... try and catch up will you
-                            let mut state_write = self.state.write().await;
-                            let room_write = state_write
-                                .connection
-                                .as_mut()
-                                .unwrap()
-                                .room
-                                .as_mut()
-                                .unwrap();
-                            room_write.is_synced = true;
-
-                            self.audio
-                                .send(AudioCommand::StartLate(f.frame as usize))
-                                .unwrap();
-                        }
-
-                        self.audio
-                            .send(AudioCommand::AudioData(AudioData::Frame(f)))
-                            .unwrap();
-                    }
-                    protocol::AudioData::Start => {
-                        {
-                            let mut state = self.state.write().await;
-                            let room = state.connection.as_mut().unwrap().room.as_mut().unwrap();
-                            room.is_synced = true;
-                        }
-                        self.audio.send(AudioCommand::AudioData(data)).unwrap();
-                    }
-                    _ => {
-                        // forward to audio thread
-                        self.audio.send(AudioCommand::AudioData(data)).unwrap();
-                    }
-                }
+                self.audio.send(AudioCommand::AudioData(data)).unwrap();
             }
 
             // should not be receiving these
@@ -512,7 +471,6 @@ impl ConnectionActor {
                             current_track: 0,
                             playback_state: PlaybackState::Stopped,
                             connected_users: HashMap::new(),
-                            is_synced: false,
                             buffering: false,
                             transmit_thread: None,
                         })

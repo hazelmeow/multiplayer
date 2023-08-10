@@ -20,8 +20,8 @@ pub struct Player {
     decoder: Decoder,
     buffer: Arc<Mutex<Ringbuf<f32>>>,
     stream: Option<Stream>,
-    frames_received: usize,
     volume: Arc<Mutex<f32>>,
+    last_frame: Option<u32>,
 }
 impl Player {
     pub fn new() -> Self {
@@ -29,17 +29,20 @@ impl Player {
             decoder: Decoder::new(48000, opus::Channels::Stereo).unwrap(),
             buffer: Arc::new(Mutex::new(Ringbuf::<f32>::new(PLAYER_BUFFER_SIZE))),
             stream: None,
-            frames_received: 0,
+            last_frame: None,
             volume: Arc::new(Mutex::new(1.0)),
         }
     }
 
     // decode opus data when received and buffer the samples
-    pub fn receive(&mut self, frame: Vec<u8>) {
+    pub fn receive(&mut self, frame_data: Vec<u8>, frame_idx: u32) {
+        self.last_frame = Some(frame_idx);
+
         // allocate and decode into here
         let mut pcm = [0.0; 960];
-        self.decoder.decode_float(&frame, &mut pcm, false).unwrap();
-        self.frames_received += 1;
+        self.decoder
+            .decode_float(&frame_data, &mut pcm, false)
+            .unwrap();
 
         let mut buffer = self.buffer.lock().unwrap();
         if buffer.len() < buffer.free_len() {
@@ -106,7 +109,7 @@ impl Player {
 
     pub fn clear(&mut self) {
         self.buffer.lock().unwrap().clear();
-        self.frames_received = 0;
+        self.last_frame = None;
         self.pause();
     }
 
@@ -132,16 +135,13 @@ impl Player {
         let buffer = self.buffer.lock().unwrap();
         buffer.len() > 48000 * 2 * SECONDS // 1s of stereo 48k
     }
-    pub fn get_seconds_elapsed(&self) -> usize {
-        const SECONDS: usize = 1;
+    pub fn get_seconds_elapsed(&self) -> u32 {
+        const SECONDS: u32 = 1;
 
         // 960 = 2 channels * 480 samples per frame
-        let samples_received = self.frames_received * 480;
+        let samples_received = self.last_frame.unwrap_or_default() * 480;
         let current_sample = samples_received.saturating_sub(48000 * SECONDS);
         current_sample.max(0) / 48000
-    }
-    pub fn fake_frames_received(&mut self, frames: usize) {
-        self.frames_received = frames;
     }
     pub fn get_visualizer_buffer(&mut self) -> Option<[f32; 4096]> {
         let buf = self.buffer.lock().unwrap();
@@ -209,7 +209,6 @@ fn write_audio<T: Sample>(
 #[derive(Debug, Clone)]
 pub enum AudioCommand {
     AudioData(AudioData),
-    StartLate(usize),
     Clear,
     Volume(f32),
     Shutdown,
@@ -278,7 +277,7 @@ impl AudioThread {
                             let _ = self.tx.send(AudioStatus::Buffer(self.p.buffer_status()));
                         }
 
-                        self.p.receive(frame.data);
+                        self.p.receive(frame.data, frame.frame);
 
                         if let Some(samples) = self.p.get_visualizer_buffer() {
                             let bars = calculate_visualizer(&samples);
@@ -287,7 +286,6 @@ impl AudioThread {
                     }
                     AudioData::Start => {
                         self.wants_play = true;
-                        self.p.fake_frames_received(0);
 
                         // if we don't have enough buffer yet, wait
                         // otherwise we had extra so we can just keep playing i guess?
@@ -302,6 +300,7 @@ impl AudioThread {
                         }
                     }
                     AudioData::Finish => {
+                        // TODO: we probably shouldnt do this
                         while !self.p.finish() {
                             std::thread::sleep(std::time::Duration::from_millis(20));
                         }
@@ -309,11 +308,6 @@ impl AudioThread {
                         let _ = self.tx.send(AudioStatus::Finished);
                     }
                 },
-                AudioCommand::StartLate(frame_id) => {
-                    self.wants_play = true;
-                    self.p.fake_frames_received(frame_id);
-                }
-
                 AudioCommand::Clear => {
                     let _ = self.tx.send(AudioStatus::Elapsed(0));
                     self.p.clear();

@@ -77,11 +77,6 @@ pub struct RoomState {
     id: u32,
     name: String,
 
-    // we only need to use this once, when we first connect
-    // if we see the start message -> we are in sync
-    // if we see a frame without start message -> we need to catch up first
-    is_synced: bool,
-
     buffering: bool,
 
     queue: VecDeque<Track>,
@@ -393,7 +388,7 @@ impl MainThread {
 
 #[derive(Debug, Clone)]
 pub enum AudioStatus {
-    Elapsed(usize),
+    Elapsed(u32),
     Buffering(bool),
     Finished,
     Visualizer([u8; 14]),
