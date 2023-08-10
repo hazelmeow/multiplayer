@@ -1,11 +1,14 @@
 use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
 use opus::Decoder;
+use ringbuf::ring_buffer::RbBase;
 use ringbuf::{LocalRb, Rb};
 use tokio::sync::mpsc;
+use tokio::time::{Instant, Interval};
 
 use protocol::AudioData;
 
@@ -112,16 +115,9 @@ impl Player {
         self.last_frame = None;
     }
 
-    pub fn finish(&mut self) -> bool {
-        {
-            let buffer = self.buffer.lock().unwrap();
-            if buffer.len() > 1024 {
-                // we will lose a tiny bit but
-                return false;
-            }
-        }
-        self.pause();
-        true
+    pub fn is_empty(&mut self) -> bool {
+        let buffer = self.buffer.lock().unwrap();
+        buffer.is_empty()
     }
 
     pub fn is_started(&self) -> bool {
@@ -189,16 +185,20 @@ fn write_audio(
 ) {
     let mut buffer = buffer_mutex.lock().unwrap();
     let vol = volume_mutex.lock().unwrap();
-    if out_data.len() < buffer.len() {
-        buffer.pop_slice(out_data);
 
-        for sample in out_data.iter_mut() {
-            *sample = *sample * *vol; // lol
-        }
-    } else {
-        // uhhhh
-        println!("write_audio: buffer underrun!! (but no panic)");
+    let fill_zeros = out_data.len().saturating_sub(buffer.len());
+    if fill_zeros > 0 {
+        println!("write_audio: buffer underrun, filling with zeros");
+
+        buffer.push_slice(&vec![0.0; fill_zeros]);
     }
+
+    buffer.pop_slice(out_data);
+
+    for sample in out_data.iter_mut() {
+        *sample = *sample * *vol; // lol
+    }
+
     if buffer.len() < 12000 {
         // TODO: actually fix this......
         println!("write_audio: buffer has {} left", buffer.len());
@@ -238,6 +238,15 @@ pub struct AudioThread {
 
     wants_play: bool,
     paused: bool,
+
+    finish_interval: Option<Interval>,
+}
+
+async fn maybe_interval_tick(maybe_interval: &mut Option<Interval>) -> Option<Instant> {
+    match maybe_interval {
+        Some(interval) => Some(interval.tick().await),
+        None => None,
+    }
 }
 
 impl AudioThread {
@@ -250,8 +259,14 @@ impl AudioThread {
         let audio_status_tx = audio_status_tx.to_owned();
 
         std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .unwrap();
+
             let mut t = AudioThread::new(audio_rx, audio_status_tx);
-            t.run();
+
+            rt.block_on(t.run());
         });
 
         AudioThreadHandle { tx: audio_tx }
@@ -268,86 +283,124 @@ impl AudioThread {
 
             wants_play: false,
             paused: false,
+
+            finish_interval: None,
         }
     }
 
-    fn run(&mut self) {
-        while let Some(data) = self.rx.blocking_recv() {
-            match data {
-                AudioCommand::AudioData(d) => match d {
-                    AudioData::Frame(frame) => {
-                        if frame.frame % 10 == 0 {
-                            let _ = self
-                                .tx
-                                .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()));
-                            let _ = self.tx.send(AudioStatus::Buffer(self.p.buffer_status()));
+    async fn run(&mut self) {
+        loop {
+            tokio::select! {
+                Some(command) = self.rx.recv() => {
+                    match command {
+                        AudioCommand::Shutdown => {
+                            break;
                         }
+                        _ => self.handle_command(command).await,
+                    }
 
-                        self.p.receive(frame.data, frame.frame);
+                    if self.p.is_ready() && self.wants_play && !self.paused {
+                        self.wants_play = false;
 
-                        if let Some(samples) = self.p.get_visualizer_buffer() {
-                            let bars = calculate_visualizer(&samples);
-                            let _ = self.tx.send(AudioStatus::Visualizer(bars));
+                        let _ = self.tx.send(AudioStatus::Buffering(false));
+
+                        if !self.p.is_started() {
+                            self.p.start()
+                        } else {
+                            self.p.resume()
                         }
                     }
-                    AudioData::Start => {
-                        self.wants_play = true;
+                }
 
-                        // if we don't have enough buffer yet, wait
-                        // otherwise we had extra so we can just keep playing i guess?
-                        // TODO: maybe this threshold should be lower so we can catch up only when we're actually low instead of every time we get a little low??
-                        if !self.p.is_ready() {
-                            let _ = self.tx.send(AudioStatus::Buffering(true));
-
-                            // if we're continuing from another song, pause until we have enough
-                            if self.p.is_started() {
-                                self.p.pause();
-                            }
-                        }
+                Some(_) = maybe_interval_tick(&mut self.finish_interval) => {
+                    // fake tick the frame count at the same rate
+                    if let Some(prev) = self.p.last_frame {
+                        self.p.last_frame = Some(prev + 1);
                     }
-                    AudioData::Finish => {
-                        // TODO: we probably shouldnt do this
-                        while !self.p.finish() {
-                            std::thread::sleep(std::time::Duration::from_millis(20));
-                        }
+
+                    let _ = self
+                        .tx
+                        .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()));
+                    let _ = self.tx.send(AudioStatus::Buffer(self.p.buffer_status()));
+
+                    if self.p.is_empty() {
+                        self.finish_interval = None;
+
                         self.p.pause();
+
                         let _ = self.tx.send(AudioStatus::Finished);
                     }
-                },
-                AudioCommand::Clear => {
-                    let _ = self.tx.send(AudioStatus::Elapsed(0));
-                    self.p.clear();
-                    self.p.pause();
                 }
-                AudioCommand::Volume(val) => {
-                    self.p.volume(val);
+
+                else => {
+                    break
                 }
-                AudioCommand::Pause(paused) => {
-                    self.paused = paused;
-                    if paused {
+            }
+        }
+    }
+
+    async fn handle_command(&mut self, data: AudioCommand) {
+        match data {
+            AudioCommand::AudioData(d) => match d {
+                AudioData::Frame(frame) => {
+                    if frame.frame % 10 == 0 {
+                        let _ = self
+                            .tx
+                            .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()));
+                        let _ = self.tx.send(AudioStatus::Buffer(self.p.buffer_status()));
+                    }
+
+                    self.p.receive(frame.data, frame.frame);
+
+                    if let Some(samples) = self.p.get_visualizer_buffer() {
+                        let bars = calculate_visualizer(&samples);
+                        let _ = self.tx.send(AudioStatus::Visualizer(bars));
+                    }
+                }
+                AudioData::Start => {
+                    self.wants_play = true;
+                    self.finish_interval = None;
+
+                    // if we don't have enough buffer yet, wait
+                    // otherwise we had extra so we can just keep playing i guess?
+                    // TODO: maybe this threshold should be lower so we can catch up only when we're actually low instead of every time we get a little low??
+                    if !self.p.is_ready() {
+                        let _ = self.tx.send(AudioStatus::Buffering(true));
+
+                        // if we're continuing from another song, pause until we have enough
                         if self.p.is_started() {
                             self.p.pause();
                         }
-                    } else {
-                        self.wants_play = true;
                     }
                 }
-                AudioCommand::Shutdown => {
-                    break;
+
+                // start an interval to finish playing stuff
+                AudioData::Finish => {
+                    let mut interval = tokio::time::interval(Duration::from_millis(10));
+                    // consume the first immediate tick
+                    interval.tick().await;
+                    self.finish_interval = Some(interval);
                 }
+            },
+            AudioCommand::Clear => {
+                let _ = self.tx.send(AudioStatus::Elapsed(0));
+                self.p.clear();
+                self.p.pause();
             }
-
-            if self.p.is_ready() && self.wants_play && !self.paused {
-                self.wants_play = false;
-
-                let _ = self.tx.send(AudioStatus::Buffering(false));
-
-                if !self.p.is_started() {
-                    self.p.start()
+            AudioCommand::Volume(val) => {
+                self.p.volume(val);
+            }
+            AudioCommand::Pause(paused) => {
+                self.paused = paused;
+                if paused {
+                    if self.p.is_started() {
+                        self.p.pause();
+                    }
                 } else {
-                    self.p.resume()
+                    self.wants_play = true;
                 }
             }
+            AudioCommand::Shutdown => unreachable!(),
         }
     }
 }

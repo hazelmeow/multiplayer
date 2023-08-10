@@ -278,16 +278,7 @@ impl ConnectionActor {
                     match msg {
                         AudioStatus::Elapsed(elapsed) => {
                             let s = self.state.read().await;
-                            let conn = s.connection.as_ref().unwrap();
-                            let room = conn.room.as_ref().expect("lol");
-
-                            let total = match &room.playback_state {
-                                PlaybackState::Playing | PlaybackState::Paused => {
-                                    s.current_track().expect("weird state").metadata.duration
-                                },
-                                PlaybackState::Stopped => 0.0,
-                            };
-
+                            let total = s.current_track().expect("weird state").metadata.duration;
                             ui_update!(UIUpdateEvent::SetTime(elapsed as f32, total));
                         }
                         AudioStatus::Buffering(is_buffering) => {
@@ -297,6 +288,8 @@ impl ConnectionActor {
                             ui_update!(UIUpdateEvent::Status);
                         }
                         AudioStatus::Finished => {
+                            ui_update!(UIUpdateEvent::SetTime(0.0, 0.0));
+
                             ui_update!(UIUpdateEvent::Status);
                         }
                         AudioStatus::Visualizer(bars) => {
