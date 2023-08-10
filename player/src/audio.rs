@@ -2,7 +2,7 @@ use std::mem::MaybeUninit;
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Sample, Stream};
+use cpal::Stream;
 use opus::Decoder;
 use ringbuf::{LocalRb, Rb};
 
@@ -83,7 +83,7 @@ impl Player {
         let stream = device
             .build_output_stream(
                 &config,
-                move |data, info| write_audio::<f32>(data, info, &buffer_handle, &volume_handle),
+                move |data, info| write_audio(data, info, &buffer_handle, &volume_handle),
                 err_fn,
                 None,
             )
@@ -182,7 +182,7 @@ impl Player {
 }
 
 // callback when the audio output needs more data
-fn write_audio<T: Sample>(
+fn write_audio(
     out_data: &mut [f32],
     _: &cpal::OutputCallbackInfo,
     buffer_mutex: &Arc<Mutex<Ringbuf<f32>>>,
