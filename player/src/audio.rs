@@ -5,16 +5,16 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::Stream;
 use opus::Decoder;
 use ringbuf::{LocalRb, Rb};
+use tokio::sync::mpsc;
 
 use protocol::AudioData;
-use tokio::sync::mpsc;
 
 use crate::gui::visualizer::calculate_visualizer;
 use crate::AudioStatus;
 
-type Ringbuf<T> = LocalRb<T, Vec<MaybeUninit<T>>>;
-
 const PLAYER_BUFFER_SIZE: usize = 48000 * 10; // 10s of samples?
+
+type Ringbuf<T> = LocalRb<T, Vec<MaybeUninit<T>>>;
 
 pub struct Player {
     decoder: Decoder,
