@@ -10,7 +10,7 @@ use ringbuf::{LocalRb, Rb};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Interval};
 
-use protocol::AudioData;
+use protocol::{AudioData, PlaybackState};
 
 use crate::gui::visualizer::calculate_visualizer;
 use crate::AudioStatus;
@@ -210,7 +210,8 @@ pub enum AudioCommand {
     AudioData(AudioData),
     Clear,
     Volume(f32),
-    Pause(bool),
+    PlaybackState(PlaybackState),
+    WaitForBuffer,
     Shutdown,
 }
 
@@ -385,18 +386,29 @@ impl AudioThread {
             AudioCommand::Clear => {
                 let _ = self.tx.send(AudioStatus::Elapsed(0));
                 self.p.clear();
-                self.p.pause();
             }
             AudioCommand::Volume(val) => {
                 self.p.volume(val);
             }
-            AudioCommand::Pause(paused) => {
-                self.paused = paused;
-                if paused {
+            AudioCommand::PlaybackState(state) => {
+                if state == PlaybackState::Stopped {
                     if self.p.is_started() {
                         self.p.pause();
                     }
                 } else {
+                    self.paused = state == PlaybackState::Paused;
+                    if self.paused {
+                        if self.p.is_started() {
+                            self.p.pause();
+                        }
+                    } else {
+                        self.wants_play = true;
+                    }
+                }
+            }
+            AudioCommand::WaitForBuffer => {
+                if !self.p.is_ready() {
+                    self.p.pause();
                     self.wants_play = true;
                 }
             }

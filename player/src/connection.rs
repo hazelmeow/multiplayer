@@ -348,8 +348,16 @@ impl ConnectionActor {
                 PlaybackCommand::Play => {}
                 PlaybackCommand::Pause => {}
 
-                PlaybackCommand::SeekTo(_) => {
-                    // TODO maybe
+                PlaybackCommand::SeekTo(secs) => {
+                    let state = self.state.write().await;
+                    let room = state.connection.as_ref().unwrap().room.as_ref().unwrap();
+
+                    if let Some(transmit) = &room.transmit_thread {
+                        let _ = transmit.send(TransmitCommand::SeekTo(secs));
+                    }
+
+                    let _ = self.audio.send(AudioCommand::Clear);
+                    let _ = self.audio.send(AudioCommand::WaitForBuffer);
                 }
             },
 
@@ -448,9 +456,7 @@ impl ConnectionActor {
                 }
 
                 self.audio
-                    .send(AudioCommand::Pause(
-                        room.playback_state == PlaybackState::Paused,
-                    ))
+                    .send(AudioCommand::PlaybackState(room.playback_state))
                     .unwrap();
 
                 ui_update!(UIUpdateEvent::QueueChanged);

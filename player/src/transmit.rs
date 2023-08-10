@@ -216,7 +216,7 @@ pub struct AudioReader {
 
     source_buffer: Vec<VecDeque<f32>>,
 
-    position: usize,
+    position: u32,
     finished: bool,
 
     sample_rate: u32,
@@ -370,9 +370,26 @@ impl AudioReader {
         self.position += 1;
 
         Ok(AudioFrame {
-            frame: self.position as u32,
+            frame: self.position,
             data: opus_data,
         })
+    }
+
+    pub fn seek_to(&mut self, secs: f32) -> Result<(), Box<dyn Error>> {
+        self.inner.probe_result.format.seek(
+            SeekMode::Accurate,
+            SeekTo::Time {
+                time: symphonia::core::units::Time::from(secs),
+                track_id: None,
+            },
+        )?;
+        self.inner.decoder.reset();
+
+        let samples = secs * 48000.0;
+        let position = samples / 480.0;
+        self.position = position as u32;
+
+        Ok(())
     }
 
     pub fn finished(&self) -> bool {
@@ -384,6 +401,7 @@ impl AudioReader {
 pub enum TransmitCommand {
     Stop,
     PauseState(bool),
+    SeekTo(f32),
 }
 
 pub type TransmitTx = mpsc::UnboundedSender<TransmitCommand>;
@@ -539,6 +557,11 @@ impl TransmitThread {
             }
             TransmitCommand::PauseState(p) => {
                 self.paused = p;
+            }
+            TransmitCommand::SeekTo(secs) => {
+                if let Err(e) = self.audio_reader.seek_to(secs) {
+                    println!("failed to seek: {e:?}");
+                }
             }
         }
     }

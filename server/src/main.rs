@@ -476,8 +476,8 @@ async fn handle_message(
             room.broadcast(&Message::PlaybackCommand(*command)).await;
 
             match command {
-                PlaybackCommand::SeekTo(secs) => {
-                    println!("seeking to {secs}");
+                PlaybackCommand::SeekTo(_) => {
+                    // this is handled by the transmitter
 
                     Ok(())
                 }
