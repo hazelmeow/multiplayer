@@ -526,7 +526,12 @@ async fn handle_message(
 
                     if let Some(idx) = current_idx {
                         let new_idx = match command {
-                            PlaybackCommand::Prev => idx.saturating_sub(1),
+                            PlaybackCommand::Prev => {
+                                // overflowing sub so the idx is actually different
+                                // otherwise with saturating_sub we wouldn't stop playback
+                                // because the track would still be found
+                                idx.overflowing_sub(1).0
+                            }
                             PlaybackCommand::Next => idx + 1,
                             _ => unreachable!(),
                         };
