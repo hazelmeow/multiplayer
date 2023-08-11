@@ -2,18 +2,20 @@ use std::collections::{HashMap, VecDeque};
 use std::error::Error;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use futures::StreamExt;
-use tokio::io;
+use futures::{SinkExt, StreamExt};
+use peer::{Peer, PeerHandle};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
-use protocol::network::FrameStream;
+use protocol::network::{message_stream, MessageStream};
 use protocol::{
     AudioData, Message, Notification, PlaybackCommand, PlaybackState, Request, Response,
     RoomListing, RoomOptions, Track,
 };
+
+mod peer;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -121,7 +123,7 @@ impl Room {
 }
 
 #[derive(Debug)]
-struct Shared {
+pub struct Shared {
     next_room: u32,
     rooms: HashMap<u32, Room>,
 
@@ -178,90 +180,50 @@ impl Shared {
     }
 }
 
-#[derive(Debug)]
-struct PeerHandle {
-    tx: Tx,
-}
-
-struct Peer {
-    id: String,
-    room_id: Option<u32>,
-    last_heartbeat: Instant,
-    addr: SocketAddr,
-    stream: FrameStream,
-    rx: Rx, // mpsc channel used to receive messages from peers
-}
-
-impl Peer {
-    async fn new(
-        state: Arc<Mutex<Shared>>,
-        stream: FrameStream,
-        id: String,
-        name: String,
-    ) -> io::Result<Peer> {
-        let (tx, rx) = mpsc::unbounded_channel();
-
-        let addr = stream.get_tcp_stream().peer_addr()?;
-
-        let mut state = state.lock().await;
-
-        let handle = PeerHandle { tx };
-        state.waiting_peers.insert(id.clone(), handle);
-
-        state.names.insert(id.clone(), name.clone());
-
-        Ok(Peer {
-            id,
-            room_id: None,
-            last_heartbeat: Instant::now(),
-            addr,
-            stream,
-            rx,
-        })
-    }
-
-    async fn notify(
-        &mut self,
-        notification: Notification,
-    ) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.stream.send(&Message::Notification(notification)).await
-    }
-}
-
 async fn handle_connection(
     state: Arc<Mutex<Shared>>,
     tcp_stream: TcpStream,
     addr: SocketAddr,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    let mut stream = FrameStream::new(tcp_stream);
+    let mut stream = message_stream(tcp_stream);
 
     // first message received must be a valid handshake
-    if let Ok(Some(first_msg)) = stream.next_frame().await {
-        match first_msg {
-            Message::Request {
-                request_id,
-                data: request,
-            } => match request {
-                Request::Handshake(hs) => {
-                    println!("* {} - handshake", addr);
-                    // pretend it's a version number or something useful
-                    if hs == "meow" {
-                        // now reply
-                        stream
-                            .send(&Message::Response {
-                                request_id,
-                                data: Response::Handshake("nyaa".to_string()),
-                            })
-                            .await?;
+    match stream.next().await {
+        Some(Ok(message)) => {
+            match message {
+                Message::Request {
+                    request_id,
+                    data: request,
+                } => match request {
+                    Request::Handshake(hs) => {
+                        println!("* {} - handshake", addr);
+                        // pretend it's a version number or something useful
+                        if hs == "meow" {
+                            // now reply
+                            stream
+                                .send(&Message::Response {
+                                    request_id,
+                                    data: Response::Handshake("nyaa".to_string()),
+                                })
+                                .await?;
 
-                        return handle_handshaken_connection(state, stream).await;
-                    } else {
-                        println!("* {} - invalid handshake", addr);
+                            return handle_handshaken_connection(state, stream, addr).await;
+                        } else {
+                            println!("* {} - invalid handshake", addr);
+                        }
                     }
-                }
+                    _ => {}
+                },
                 _ => {}
-            },
-            _ => {}
+            }
+        }
+
+        Some(Err(e)) => {
+            println!("* {} - err: {}", addr, e)
+        }
+
+        None => {
+            println!("* {} - socket disconnected", addr);
         }
     }
 
@@ -271,10 +233,19 @@ async fn handle_connection(
 
 async fn handle_handshaken_connection(
     state: Arc<Mutex<Shared>>,
-    mut stream: FrameStream,
+    mut stream: MessageStream<TcpStream>,
+    addr: SocketAddr,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     // loop for un-upgraded connections
-    while let Some(msg) = stream.next_frame().await? {
+    while let Some(maybe_msg) = stream.next().await {
+        let msg = match maybe_msg {
+            Ok(m) => m,
+            Err(e) => {
+                println!("* {} - err: {}", addr, e);
+                continue;
+            }
+        };
+
         match msg {
             Message::QueryRoomList => {
                 let state = state.lock().await;
@@ -288,7 +259,7 @@ async fn handle_handshaken_connection(
                 data: request,
             } => match request {
                 Request::Authenticate { id, name } => {
-                    println!("* {} - authenticate: {}", stream.get_addr().unwrap(), id);
+                    println!("* {} - authenticate: {}", addr, id);
 
                     stream
                         .send(&Message::Response {
@@ -299,7 +270,7 @@ async fn handle_handshaken_connection(
 
                     // todo: check id format? check if in use? send success message?
 
-                    return handle_authenticated_connection(state, stream, id, name).await;
+                    return handle_authenticated_connection(state, stream, addr, id, name).await;
                 }
 
                 _ => {
@@ -389,50 +360,17 @@ async fn join_room(
 
 async fn handle_authenticated_connection(
     state: Arc<Mutex<Shared>>,
-    stream: FrameStream,
+    stream: MessageStream<TcpStream>,
+    addr: SocketAddr,
     id: String,
     name: String,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
-    // create a new Peer
     let mut peer = Peer::new(state.clone(), stream, id, name).await?;
 
-    let mut heartbeat_check_interval = tokio::time::interval(tokio::time::Duration::from_secs(10));
+    peer.log(format!("connected from {}", addr));
 
-    // process incoming messages until disconnected
-    loop {
-        tokio::select! {
-            // react to messages on mpsc channel
-            Some(msg) = peer.rx.recv() => {
-                peer.stream.send(&msg).await?;
-            }
-
-            // react to frames from tcp stream
-            result = peer.stream.get_inner().next() => match result {
-                // a full frame was received
-                Some(Ok(bytes)) => {
-                    let msg: Message = bincode::deserialize(&bytes).expect("failed to deserialize message");
-                    //println!("* {} - {:?}", addr, &msg);
-
-                    handle_message(state.clone(), &mut peer, &msg).await?;
-                }
-
-                Some(Err(e)) => {
-                    println!("error occurred while processing message: {:?}", e)
-                }
-
-                // socket disconnected
-                None => break
-            },
-
-            // if we haven't received a heartbeat in the last 2 minutes, disconnect them
-            _ = heartbeat_check_interval.tick() => {
-                let elapsed = peer.last_heartbeat.elapsed();
-                if elapsed > Duration::from_secs(120) {
-                    break
-                }
-            }
-        }
-    }
+    // loop until disconnected
+    peer.run(state.clone()).await;
 
     // client disconnected gracefully
     handle_disconnect(state, &mut peer).await;
@@ -454,12 +392,11 @@ async fn handle_message(
 
             match result {
                 Ok(Some(response)) => {
-                    peer.stream
-                        .send(&Message::Response {
-                            request_id: *request_id,
-                            data: response,
-                        })
-                        .await?;
+                    peer.send(&Message::Response {
+                        request_id: *request_id,
+                        data: response,
+                    })
+                    .await?;
 
                     Ok(())
                 }
@@ -561,7 +498,7 @@ async fn handle_message(
             match data {
                 protocol::AudioData::Frame(_) => {} // dont log
                 _ => {
-                    println!("* {} - audio data {:?}", peer.addr, data);
+                    peer.log(format!("audio data {:?}", data));
                 }
             }
 
@@ -615,7 +552,7 @@ async fn handle_message(
         }
 
         Message::Text(text) => {
-            println!("* {} - '{}'", peer.addr, text);
+            peer.log(format!("'{}'", text));
 
             let mut state = state.lock().await;
             let Some(room) = peer.room_id.map(|i| state.rooms.get_mut(&i).unwrap()) else { return Ok(()) };

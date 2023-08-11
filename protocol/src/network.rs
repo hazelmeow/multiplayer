@@ -1,60 +1,65 @@
-use futures::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
-
-use std::{error::Error, net::SocketAddr};
+use bytes::{Bytes, BytesMut};
+use thiserror::Error;
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio_util::codec::{Decoder, Encoder, Framed, LengthDelimitedCodec};
 
 use crate::Message;
 
-pub struct FrameStream {
-    // LengthDelimitedCodec is used to convert a TcpStream of bytes (may be fragmented) into frames
-    // which will be serialized/deserialized with bincode
-    inner: Framed<TcpStream, LengthDelimitedCodec>,
+/// A stream and sink of Messages wrapping a stream `S`
+/// where `S` is `AsyncRead + AsyncWrite`.
+///
+/// Messages are serialized with bincode and sent in
+/// length-delimited frames.
+pub type MessageStream<S> = Framed<S, MessageCodec>;
+
+/// Wraps a stream `S: AsyncRead + AsyncWrite` in a MessageCodec.
+pub fn message_stream<S: AsyncRead + AsyncWrite>(stream: S) -> MessageStream<S> {
+    Framed::new(stream, MessageCodec::new())
 }
 
-impl FrameStream {
-    pub fn new(stream: TcpStream) -> Self {
-        FrameStream {
-            inner: Framed::new(stream, LengthDelimitedCodec::new()),
+pub struct MessageCodec {
+    inner: LengthDelimitedCodec,
+}
+
+/// Wraps a LengthDelimitedCodec and converts between
+/// bytes and Messages using bincode.
+impl MessageCodec {
+    fn new() -> Self {
+        Self {
+            inner: LengthDelimitedCodec::new(),
         }
     }
+}
 
-    pub fn get_tcp_stream(&self) -> &TcpStream {
-        self.inner.get_ref()
-    }
-    pub fn get_inner(&mut self) -> &mut Framed<TcpStream, LengthDelimitedCodec> {
-        &mut self.inner
-    }
-    pub fn get_addr(&self) -> Result<SocketAddr, std::io::Error> {
-        self.inner.get_ref().peer_addr()
-    }
+impl Decoder for MessageCodec {
+    type Item = Message;
+    type Error = MessageStreamError;
 
-    pub async fn send(&mut self, msg: &Message) -> Result<(), Box<dyn Error + Send + Sync>> {
-        let serialized = bincode::serialize(msg)?;
-        let bytes = bytes::Bytes::from(serialized);
-        self.inner.send(bytes).await?;
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<Self::Item>, Self::Error> {
+        self.inner
+            .decode(src)?
+            .map(|b| bincode::deserialize::<Message>(&b))
+            .transpose()
+            .map_err(MessageStreamError::from)
+    }
+}
+
+impl Encoder<&Message> for MessageCodec {
+    type Error = MessageStreamError;
+
+    fn encode(&mut self, item: &Message, dst: &mut BytesMut) -> Result<(), Self::Error> {
+        let bytes_vec = bincode::serialize(item)?;
+        let bytes = Bytes::from(bytes_vec);
+        self.inner.encode(bytes, dst)?;
         Ok(())
     }
+}
 
-    // waits for the next frame and deserializes it
-    // returns Ok(Some(Message)) if successful or returns Ok(None) if the socket disconnected
-    pub async fn next_frame(&mut self) -> Result<Option<Message>, Box<dyn Error + Send + Sync>> {
-        let addr = self.inner.get_ref().peer_addr()?;
+#[derive(Debug, Error)]
+pub enum MessageStreamError {
+    #[error(transparent)]
+    Bincode(#[from] bincode::Error),
 
-        match self.inner.next().await {
-            Some(Ok(bytes)) => {
-                let msg = bincode::deserialize::<Message>(&bytes)?;
-                Ok(Some(msg))
-            }
-            Some(Err(e)) => {
-                println!("* {} - err: {}", addr, e);
-                Err(Box::new(e))
-            }
-            None => {
-                println!("* {} - socket disconnected", addr);
-                Ok(None)
-            }
-        }
-    }
-
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
 }

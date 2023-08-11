@@ -5,15 +5,18 @@ use std::{
     time::Duration,
 };
 
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot, RwLock},
     time::timeout,
 };
 
-use protocol::{network::FrameStream, PlaybackCommand, PlaybackState, RoomListing, TrackRequest};
-use protocol::{Message, Notification, Request, Response, RoomOptions};
+use protocol::network::{message_stream, MessageStream};
+use protocol::{
+    Message, Notification, PlaybackCommand, PlaybackState, Request, Response, RoomListing,
+    RoomOptions, TrackRequest,
+};
 
 use crate::{
     audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
@@ -125,7 +128,7 @@ impl ConnectionActorHandle {
 }
 
 pub struct ConnectionActor {
-    stream: FrameStream,
+    stream: MessageStream<TcpStream>,
     next_id: u32,
     pending: HashMap<u32, oneshot::Sender<Response>>,
 
@@ -197,7 +200,7 @@ impl ConnectionActor {
         rx: mpsc::UnboundedReceiver<NetworkCommand>,
     ) -> Result<Self, tokio::io::Error> {
         let tcp_stream = TcpStream::connect(&server.addr).await?;
-        let stream = FrameStream::new(tcp_stream);
+        let stream = message_stream(tcp_stream);
 
         state.write().await.connection = Some(ConnectionState { server, room: None });
 
@@ -251,15 +254,10 @@ impl ConnectionActor {
                 }
 
                 // received a tcp message
-                result = self.stream.get_inner().next() => {
+                result = self.stream.next() => {
                     match result {
                         Some(r) => match r {
-                            Ok(bytes) => match bincode::deserialize::<Message>(&bytes) {
-                                Ok(msg) => self.handle_message(msg).await,
-                                Err(e) => {
-                                    println!("failed to deserialize message: {:?}", e);
-                                }
-                            },
+                            Ok(msg) => self.handle_message(msg).await,
                             Err(e) => {
                                 println!("tcp stream error: {:?}", e);
                             }
@@ -529,7 +527,7 @@ const QUERY_PROTOCOL_TIMEOUT: Duration = Duration::from_secs(1);
 
 pub async fn query_room_list(addr: &str) -> Result<Vec<RoomListing>, Box<dyn Error + Send + Sync>> {
     let tcp_stream = timeout(QUERY_TCP_TIMEOUT, TcpStream::connect(addr)).await??;
-    let mut stream = FrameStream::new(tcp_stream);
+    let mut stream = message_stream(tcp_stream);
 
     // send a handshake
     stream
@@ -541,7 +539,7 @@ pub async fn query_room_list(addr: &str) -> Result<Vec<RoomListing>, Box<dyn Err
 
     // wait for a handshake response to send a room list query,
     // then wait for the room list or time out if the server does not comply
-    while let Ok(Ok(Some(message))) = timeout(QUERY_PROTOCOL_TIMEOUT, stream.next_frame()).await {
+    while let Ok(Some(Ok(message))) = timeout(QUERY_PROTOCOL_TIMEOUT, stream.next()).await {
         match message {
             Message::Response {
                 request_id,
