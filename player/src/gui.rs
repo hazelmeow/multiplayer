@@ -85,9 +85,10 @@ pub enum UIEvent {
     DroppedFiles(String),
     HideQueue,
     HideConnectionWindow,
-    HidePrefsWindow,
+    ShowPrefsWindow,
     PleaseSavePreferencesWithThisData,
     SavePreferences { name: String },
+    SwitchPrefsPage(String),
     Quit,
 
     Update(UIUpdateEvent),
@@ -215,7 +216,7 @@ impl UIThread {
         let queue_gui = QueueWindow::make_window();
         let connection_gui = ConnectionWindow::make_window(state.clone());
         let mut prefs_gui = PrefsWindow::make_window();
-        prefs_gui.main_win.show();
+        //prefs_gui.main_win.show();
         prefs_gui.load_state(&state.blocking_read().preferences);
 
         // stuff for cool custom titlebars
@@ -280,7 +281,7 @@ impl UIThread {
         handle_window(&mut self.gui.main_win, false, Some(0), e.clone());
         handle_window(&mut self.queue_gui.main_win, false, Some(1), e.clone());
         handle_window(&mut self.connection_gui.main_win, false, Some(2), e.clone());
-        handle_window(&mut self.prefs_gui.main_win, true, None, e.clone());
+        //handle_window(&mut self.prefs_gui.main_win, true, None, e.clone());
 
         // i made the name short so it doesnt autoformat the lines above on to multiple lines
         // but also it probably shouldnt be in scope as `e` so (lol?)
@@ -347,13 +348,17 @@ impl UIThread {
                     UIEvent::HideConnectionWindow => {
                         self.connection_gui.main_win.hide();
                     }
-                    UIEvent::HidePrefsWindow => {
-                        self.prefs_gui.main_win.hide();
+                    UIEvent::ShowPrefsWindow => {
+                        self.prefs_gui.main_win.show();
                     }
                     UIEvent::PleaseSavePreferencesWithThisData => {
                         ui_send!(UIEvent::SavePreferences {
-                            name: self.prefs_gui.fld_name.value(),
+                            name: self.prefs_gui.items.fld_name.as_ref().unwrap().value(),
                         });
+                        self.prefs_gui.main_win.hide();
+                    }
+                    UIEvent::SwitchPrefsPage(path) => {
+                        self.prefs_gui.switch_page(&path);
                     }
                     UIEvent::Quit => break,
                     _ => {}
@@ -814,9 +819,19 @@ fn handle_window_misc(_w: &mut DoubleWindow, ev: Event) -> bool {
     match ev {
         fltk::enums::Event::Shortcut => {
             let key = app::event_key();
+            let f1: bool = key.bits() == Key::F1.bits();
+            let p = Key::from_char('p').bits();
 
-            // don't close the program (return true -> mark the event as handled)
-            key == Key::Escape
+            if key.bits() == Key::Escape.bits() {
+                return true;
+            }
+
+            if key.bits() == Key::from_char('p').bits() && app::is_event_ctrl() {
+                ui_send!(UIEvent::ShowPrefsWindow);
+                true
+            } else {
+                false
+            }
         }
         _ => false,
     }

@@ -19,19 +19,30 @@ impl GroupBox {
 
         inner.draw(|g| {
             draw::set_draw_color(Color::Black);
-            draw::draw_box(FrameType::DownFrame, g.x(), g.y(), g.w(), g.h(), g.color());            
+            draw::draw_box(
+                FrameType::BorderFrame,
+                g.x(),
+                g.y(),
+                g.w(),
+                g.h(),
+                Color::from_rgb(100, 100, 100),
+            );
 
             let text_w = measure(&g.label(), true);
 
-            draw::draw_box(FrameType::FlatBox, g.x()+8, g.y()-text_w.1/2, text_w.0+4, text_w.1, g.color());
+            draw::draw_box(
+                FrameType::FlatBox,
+                g.x() + 8,
+                g.y() - text_w.1 / 2,
+                text_w.0 + 4,
+                text_w.1,
+                g.color(),
+            );
             draw::set_draw_color(Color::Black);
             draw::set_font(Font::Helvetica, app::font_size());
-            draw::draw_text(&g.label(), g.x()+10, g.y()+text_w.1/2 - 3);
+            draw::draw_text(&g.label(), g.x() + 10, g.y() + text_w.1 / 2 - 3);
             g.draw_children();
         });
-        Self {
-            inner
-        }
+        Self { inner }
     }
 }
-
