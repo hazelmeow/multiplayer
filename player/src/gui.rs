@@ -859,17 +859,17 @@ fn create_horizontal_gradient_frame(
 }
 
 fn add_bar(win: &mut DoubleWindow, close_message: UIEvent, title: &str) {
-    let mut bar = Group::new(4, 4, win.width() - 8, 17, "");
+    let mut bar = Group::new(3, 3, win.width() - 8, 17, "");
     let mut bar_bg = create_horizontal_gradient_frame(
-        4,
-        4,
+        3,
+        3,
         win.width() - 8,
         17,
         Color::from_rgb(56, 85, 145),
         Color::from_rgb(166, 202, 240),
     );
     let t = title.to_owned();
-    let mut bar_title = Frame::new(8, 4, 100, 17, "").with_label(&t);
+    let mut bar_title = Frame::new(7, 3, 100, 17, "").with_label(&t);
     bar_title.set_align(Align::Left | Align::Inside);
     bar_title.set_label_font(Font::HelveticaBold);
     bar_title.set_label_size(12);

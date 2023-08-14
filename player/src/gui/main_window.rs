@@ -39,7 +39,7 @@ pub struct MainWindow {
 }
 impl MainWindow {
     pub fn make_window() -> Self {
-        let mut main_win = Window::new(100, 100, 400, 190, "multiplayer :3");
+        let mut main_win = Window::new(100, 100, 400, 185, "multiplayer :3");
         //main_win.set_border(false);
         main_win.set_frame(FrameType::UpBox);
         main_win.set_icon(Some(
@@ -54,8 +54,8 @@ impl MainWindow {
         add_bar(&mut main_win, UIEvent::Quit, "multiplayer :3");
 
         // --- buttons ---
-        let buttons_y = 130;
-        let buttons_left = 30;
+        let buttons_y = 128;
+        let buttons_left = 13;
         let bp = 36 + 5;
 
         let mut btn_prev = Button::new(buttons_left, buttons_y, 36, 26, "");
@@ -106,7 +106,7 @@ impl MainWindow {
         let seek_bar_dragging = Arc::new(Mutex::new(false));
         let seek_bar_dragging2 = seek_bar_dragging.clone();
 
-        let mut seek_bar = HorNiceSlider::new(14, buttons_y - 35, 270, 24, "");
+        let mut seek_bar = HorNiceSlider::new(buttons_left, buttons_y - 35, 250, 24, "");
         seek_bar.handle(move |sb, ev| match ev {
             fltk::enums::Event::Push => {
                 let mut d = seek_bar_dragging2.blocking_lock();
@@ -200,15 +200,34 @@ impl MainWindow {
         });
         main_win.add(&volume_slider);
 
-        let users = Browser::new(main_win.width() - 85 - 18, 26, 85, 120, "Users");
+        let mut users = Browser::new(main_win.width() - 85 - 18, 31, 90, 125, "");
+        users.set_text_size(11);
         main_win.add(&users);
 
-        let mut btn_connect = Button::new(main_win.width() - 85 - 46, 26, 24, 24, "Cn");
+        let mut btn_connect = Button::new(main_win.width() - 85 - 46, 31, 24, 24, "Cn");
         btn_connect.emit(sender!(), UIEvent::BtnOpenConnectionDialog);
         main_win.add(&btn_connect);
 
-        let mut btn_queue = Button::new(main_win.width() - 85 - 46, 26 + 24 + 2, 24, 24, "Qu");
+        let mut btn_queue = Button::new(main_win.width() - 85 - 46, 31 + 24 + 2, 24, 24, "Qu");
         btn_queue.emit(sender!(), UIEvent::BtnQueue);
+        main_win.add(&btn_queue);
+
+        let mut btn_queue = Button::new(
+            main_win.width() - 85 - 46,
+            31 + 24 + 2 + 24 + 2,
+            24,
+            24,
+            "Me",
+        );
+        main_win.add(&btn_queue);
+
+        let mut btn_queue = Button::new(
+            main_win.width() - 85 - 46,
+            31 + 24 + 2 + 24 + 2 + 24 + 2,
+            24,
+            24,
+            "ow",
+        );
         main_win.add(&btn_queue);
 
         main_win.end();
