@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bytes::{Bytes, BytesMut};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -17,6 +19,7 @@ pub fn message_stream<S: AsyncRead + AsyncWrite>(stream: S) -> MessageStream<S> 
     Framed::new(stream, MessageCodec::new())
 }
 
+#[derive(Debug)]
 pub struct MessageCodec {
     inner: LengthDelimitedCodec,
 }
@@ -55,11 +58,23 @@ impl Encoder<&Message> for MessageCodec {
     }
 }
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, Clone)]
 pub enum MessageStreamError {
     #[error(transparent)]
-    Bincode(#[from] bincode::Error),
+    Bincode(#[from] Arc<bincode::Error>),
 
     #[error(transparent)]
-    Io(#[from] std::io::Error),
+    Io(#[from] Arc<std::io::Error>),
+}
+
+impl From<bincode::Error> for MessageStreamError {
+    fn from(value: bincode::Error) -> Self {
+        Self::Bincode(Arc::new(value))
+    }
+}
+
+impl From<std::io::Error> for MessageStreamError {
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(Arc::new(value))
+    }
 }

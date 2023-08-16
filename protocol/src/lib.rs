@@ -65,7 +65,6 @@ pub struct RoomOptions {
 pub enum Message {
     QueryRoomList,
 
-    RefreshRoomList,
     AudioData(AudioData),
     Text(String),
 

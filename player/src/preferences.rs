@@ -40,7 +40,7 @@ fn generate_id() -> String {
 fn default_servers() -> Vec<Server> {
     vec![Server {
         name: "local".into(),
-        addr: "127.0.0.1:8080".into(),
+        addr: "127.0.0.1:5119".into(),
     }]
 }
 

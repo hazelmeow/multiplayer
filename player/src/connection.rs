@@ -62,10 +62,6 @@ impl ConnectionActorHandle {
         Ok(())
     }
 
-    pub fn refresh_room_list(&mut self) -> Result<(), Box<dyn Error>> {
-        self.send(Message::RefreshRoomList)
-    }
-
     // keep this one private for sure though
     async fn send_request(&self, data: Request) -> Result<Response, Box<dyn Error>> {
         let (send, recv) = oneshot::channel::<Response>();
@@ -365,7 +361,6 @@ impl ConnectionActor {
 
             // should not be receiving these
             Message::QueryRoomList => println!("unexpected message: {:?}", message),
-            Message::RefreshRoomList => println!("unexpected message: {:?}", message),
             Message::Text(_) => println!("unexpected message: {:?}", message),
             Message::Request { .. } => println!("unexpected message: {:?}", message),
             Message::Heartbeat => println!("unexpected message: {:?}", message),
