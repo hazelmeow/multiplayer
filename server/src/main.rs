@@ -88,6 +88,8 @@ impl MainActor {
     }
 
     async fn run(&mut self) {
+        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+
         loop {
             tokio::select! {
                 // Accept TCP connections
@@ -130,7 +132,8 @@ impl MainActor {
                             self.roomless_clients.insert(client);
                         }
                         Some(Ok(Message::Heartbeat)) => {
-                            // TODO
+                            let c = self.unauthed_connections.get_mut(&conn_id).unwrap();
+                            c.set_heartbeat();
                         }
                         Some(Ok(m)) => {
                             let conn = self.unauthed_connections.get(&conn_id).unwrap();
@@ -198,6 +201,49 @@ impl MainActor {
                         },
                     }
                 }
+
+                _ = heartbeat_interval.tick() => {
+                    let notify = {
+                        let should_remove: Vec<Id> = self.roomless_clients
+                            .get_inner()
+                            .iter()
+                            .filter(|(_, c)| {
+                                c.since_heartbeat() > Duration::from_secs(120)
+                            })
+                            .map(|(id, c)| {
+                                c.log("heartbeat timed out".into());
+                                id.clone()
+                            })
+                            .collect();
+
+                        for id in should_remove.iter() {
+                            self.roomless_clients.remove(id);
+                        }
+                        !should_remove.is_empty()
+                    };
+                    let notify2 = {
+                        let should_remove: Vec<usize> = self.unauthed_connections
+                            .get_inner()
+                            .iter()
+                            .filter(|(_, c)| {
+                                c.since_heartbeat() > Duration::from_secs(120)
+                            })
+                            .map(|(id, c)| {
+                                c.log("heartbeat timed out".into());
+                                *id
+                            })
+                            .collect();
+
+                        for id in should_remove.iter() {
+                            self.unauthed_connections.remove(id);
+                        }
+                        !should_remove.is_empty()
+                    };
+
+                    if notify || notify2 {
+                        self.notify_room_list().await;
+                    }
+                }
             }
         }
     }
@@ -231,8 +277,12 @@ impl MainActor {
             }
 
             Message::QueryRoomList => todo!(),
-            // TODO
-            Message::Heartbeat => Err("unexpected message".into()),
+
+            Message::Heartbeat => {
+                let c = self.roomless_clients.get_mut(id).unwrap();
+                c.set_heartbeat();
+                Ok(())
+            }
 
             // handled by room
             Message::AudioData(_) => Err(format!("unexpected message: {:?}", message).into()),

@@ -1,7 +1,6 @@
-// TODO: heartbeat checks
-
 use std::collections::VecDeque;
 use std::error::Error;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -104,6 +103,8 @@ impl RoomActor {
     }
 
     async fn run(&mut self) {
+        let mut heartbeat_interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
+
         loop {
             tokio::select! {
                 (id, maybe_message) = &mut self.clients.next_message() => {
@@ -141,6 +142,27 @@ impl RoomActor {
 
                             self.notify(self.connected_users_notification()).await;
                         },
+                    }
+                }
+
+                _ = heartbeat_interval.tick() => {
+                    let should_remove: Vec<Id> = self.clients
+                        .get_inner()
+                        .iter()
+                        .filter(|(_, c)| {
+                            c.since_heartbeat() > Duration::from_secs(120)
+                        })
+                        .map(|(id, c)| {
+                            c.log("heartbeat timed out".into());
+                            id.clone()
+                        })
+                        .collect();
+
+                    for id in should_remove.iter() {
+                        self.remove_client(id).await;
+                    }
+                    if !should_remove.is_empty() {
+                        self.main_tx.send(MainCommand::ClientDisconnected).unwrap();
                     }
                 }
             }

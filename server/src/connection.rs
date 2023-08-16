@@ -3,7 +3,7 @@ use std::error::Error;
 use std::hash::Hash;
 use std::net::SocketAddr;
 use std::task::Poll;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use futures::future::{join_all, poll_fn};
@@ -198,6 +198,7 @@ pub trait Connection {
 pub struct UnauthedConnection {
     stream: MessageStream<TcpStream>,
     addr: SocketAddr,
+    last_heartbeat: Instant,
 }
 
 impl Connection for UnauthedConnection {
@@ -224,6 +225,7 @@ impl UnauthedConnection {
         Self {
             stream: message_stream(stream),
             addr,
+            last_heartbeat: Instant::now(),
         }
     }
 
@@ -234,6 +236,13 @@ impl UnauthedConnection {
             name,
             last_heartbeat: Instant::now(),
         }
+    }
+
+    pub fn set_heartbeat(&mut self) {
+        self.last_heartbeat = Instant::now();
+    }
+    pub fn since_heartbeat(&self) -> Duration {
+        self.last_heartbeat.elapsed()
     }
 }
 
@@ -268,18 +277,7 @@ impl Client {
     pub fn set_heartbeat(&mut self) {
         self.last_heartbeat = Instant::now();
     }
-
-    // TODO
-    // pub async fn run(&mut self, state: Arc<Mutex<Shared>>) {
-    //     let mut heartbeat_check_interval = tokio::time::interval(Duration::from_secs(10));
-    //             // if we haven't received a heartbeat in the last 2 minutes, disconnect them
-    //             _ = heartbeat_check_interval.tick() => {
-    //                 let elapsed = self.last_heartbeat.elapsed();
-    //                 if elapsed > Duration::from_secs(120) {
-    //                     break
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
+    pub fn since_heartbeat(&self) -> Duration {
+        self.last_heartbeat.elapsed()
+    }
 }
