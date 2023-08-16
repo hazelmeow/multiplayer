@@ -121,7 +121,7 @@ impl MainActor {
                             let mut conn = self.unauthed_connections.remove(&conn_id).unwrap();
                             conn.log(format!("authenticating as {id}"));
 
-                            // todo: check id format? check if in use? send success message?
+                            // TODO: check id format? check if in use? send success message?
                             let _ = conn.send(&Message::Response {
                                 request_id,
                                 data: Response::Success(true),
@@ -311,7 +311,7 @@ impl MainActor {
                 let Some(room_handle) = self.rooms.get(&room_id) else { return Ok(Response::Success(false)); };
                 let Some(mut client) = self.roomless_clients.remove(client_id) else { return Ok(Response::Success(false)); };
 
-                // TODO technically we shouldn't send this until after the transfer succeeded
+                // TODO: technically we shouldn't send this until after the transfer succeeded
                 // but we have to send client to the room task for that so it's a little annoying
                 let resp = Response::Success(true);
                 client

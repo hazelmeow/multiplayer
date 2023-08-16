@@ -301,7 +301,7 @@ impl RoomActor {
                     }
                 }
 
-                // TODO check that the correct person is sending this
+                // TODO: check that the correct person is sending this
 
                 match data {
                     AudioData::Finish => {

@@ -70,7 +70,7 @@ pub trait Connections {
             // if any streams are ready, return their value
             for (id, client) in self.get_inner_mut().iter_mut() {
                 match client.get_mut().poll_next_unpin(cx) {
-                    // TODO: fix this clone maybe
+                    // TODO: fix this clone maybe (make Clients::Key Arc<String>???)
                     Poll::Ready(message) => {
                         return Poll::Ready((id.clone(), message));
                     }
