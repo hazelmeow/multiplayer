@@ -360,9 +360,9 @@ impl RoomActor {
             }
 
             // should not be reached
-            Message::QueryRoomList => Ok(()),
-            Message::Notification(_) => Ok(()),
-            Message::Response { .. } => Ok(()),
+            Message::QueryRoomList => Err(format!("unexpected message: {:?}", message).into()),
+            Message::Notification(_) => Err(format!("unexpected message: {:?}", message).into()),
+            Message::Response { .. } => Err(format!("unexpected message: {:?}", message).into()),
         }
     }
 
