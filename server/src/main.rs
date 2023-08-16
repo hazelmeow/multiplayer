@@ -276,7 +276,12 @@ impl MainActor {
                 }
             }
 
-            Message::QueryRoomList => todo!(),
+            Message::QueryRoomList => {
+                let n = self.room_list_notification().await;
+                let c = self.roomless_clients.get_mut(id).unwrap();
+                c.send(&Message::Notification(n)).await;
+                Ok(())
+            }
 
             Message::Heartbeat => {
                 let c = self.roomless_clients.get_mut(id).unwrap();
