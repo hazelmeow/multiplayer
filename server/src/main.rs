@@ -2,12 +2,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::time::Duration;
 
-use connection::{
-    Client, Clients, Connection, Connections, UnauthedConnection, UnauthedConnections,
-};
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use room::{RoomActor, RoomHandle};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
@@ -16,17 +12,20 @@ use protocol::{Message, Notification, Request, Response, RoomListing, RoomOption
 mod connection;
 mod room;
 
+use connection::{
+    Client, Clients, Connection, Connections, UnauthedConnection, UnauthedConnections,
+};
+use room::{RoomActor, RoomHandle};
+
 // TODO: maybe move to protocol eventually and validate
 type Id = String;
 
 #[tokio::main(flavor = "multi_thread")]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() {
     let bind_addr = "0.0.0.0:5119".to_string();
 
-    let mut main_actor = MainActor::new(&bind_addr).await?;
+    let mut main_actor = MainActor::new(&bind_addr).await.unwrap();
     main_actor.run().await;
-
-    Ok(())
 }
 
 #[derive(Debug)]
