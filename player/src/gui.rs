@@ -165,6 +165,8 @@ struct WindowEdges {
 
     width: i32,
     height: i32,
+
+    shown: bool,
 }
 impl WindowEdges {
     fn update(&mut self, win: &DoubleWindow) {
@@ -175,6 +177,8 @@ impl WindowEdges {
 
         self.width = win.width();
         self.height = win.height();
+
+        self.shown = win.visible();
     }
 }
 
@@ -285,6 +289,8 @@ impl UIThread {
 
         // i made the name short so it doesnt autoformat the lines above on to multiple lines
         // but also it probably shouldnt be in scope as `e` so (lol?)
+        // TODO i forget what i was gonna do here so uhh
+        let edges_state = e.clone();
         drop(e);
 
         while self.app.wait() {
@@ -337,16 +343,28 @@ impl UIThread {
                         self.tx
                             .send(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh))
                             .unwrap();
+                        edges_state
+                            .blocking_write()
+                            .update_window(2, &self.connection_gui.main_win);
                     }
                     UIEvent::BtnQueue => {
                         self.queue_gui.main_win.show();
                         //ui_tx.send(UIEvent::Update(UIUpdateEvent::UpdateQueue(self.queue.clone())));
+                        edges_state
+                            .blocking_write()
+                            .update_window(1, &self.queue_gui.main_win);
                     }
                     UIEvent::HideQueue => {
                         self.queue_gui.main_win.hide();
+                        edges_state
+                            .blocking_write()
+                            .update_window(1, &self.queue_gui.main_win);
                     }
                     UIEvent::HideConnectionWindow => {
                         self.connection_gui.main_win.hide();
+                        edges_state
+                            .blocking_write()
+                            .update_window(2, &self.connection_gui.main_win);
                     }
                     UIEvent::ShowPrefsWindow => {
                         self.prefs_gui.main_win.show();
@@ -648,7 +666,9 @@ fn handle_window_drag(
                     .iter()
                     .enumerate()
                     // don't snap to ourself
-                    .filter_map(|(i, o)| if i == id { None } else { Some(o) });
+                    .filter_map(|(i, o)| if i == id { None } else { Some(o) })
+                    // don't snap to non-visible windows
+                    .filter(|e| e.shown);
 
                 let mut left_right_edges = valid_edges
                     .clone()
