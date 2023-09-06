@@ -123,12 +123,12 @@ pub enum ConnectionDlgEvent {
 
 #[derive(Default)]
 struct DragState {
-    id: Option<usize>,
+    id: Option<WindowId>,
     x: i32,
     y: i32,
 }
 impl DragState {
-    fn with_id(mut self, id: usize) -> Self {
+    fn with_id(mut self, id: WindowId) -> Self {
         self.id = Some(id);
         self
     }
@@ -185,9 +185,16 @@ impl WindowEdges {
 #[derive(Default)]
 struct AllWindowEdges([WindowEdges; 3]);
 impl AllWindowEdges {
-    fn update_window(&mut self, id: usize, win: &DoubleWindow) {
-        self.0[id].update(win);
+    fn update_window(&mut self, id: WindowId, win: &DoubleWindow) {
+        self.0[id as usize].update(win);
     }
+}
+
+#[derive(Clone, Copy)]
+enum WindowId {
+    Main = 0,
+    Queue = 1,
+    Connection = 2,
 }
 
 impl UIThread {
@@ -255,7 +262,7 @@ impl UIThread {
         fn handle_window(
             win: &mut DoubleWindow,
             modal: bool,
-            maybe_id: Option<usize>,
+            maybe_id: Option<WindowId>,
             e: Arc<RwLock<AllWindowEdges>>,
         ) {
             let mut drag_state = DragState::default();
@@ -276,15 +283,30 @@ impl UIThread {
         }
 
         let mut edges_state = AllWindowEdges::default();
-        edges_state.update_window(0, &self.gui.main_win);
-        edges_state.update_window(1, &self.queue_gui.main_win);
-        edges_state.update_window(2, &self.connection_gui.main_win);
+        edges_state.update_window(WindowId::Main, &self.gui.main_win);
+        edges_state.update_window(WindowId::Queue, &self.queue_gui.main_win);
+        edges_state.update_window(WindowId::Connection, &self.connection_gui.main_win);
 
         let e = Arc::new(RwLock::new(edges_state));
 
-        handle_window(&mut self.gui.main_win, false, Some(0), e.clone());
-        handle_window(&mut self.queue_gui.main_win, false, Some(1), e.clone());
-        handle_window(&mut self.connection_gui.main_win, false, Some(2), e.clone());
+        handle_window(
+            &mut self.gui.main_win,
+            false,
+            Some(WindowId::Main),
+            e.clone(),
+        );
+        handle_window(
+            &mut self.queue_gui.main_win,
+            false,
+            Some(WindowId::Queue),
+            e.clone(),
+        );
+        handle_window(
+            &mut self.connection_gui.main_win,
+            false,
+            Some(WindowId::Connection),
+            e.clone(),
+        );
         //handle_window(&mut self.prefs_gui.main_win, true, None, e.clone());
 
         // i made the name short so it doesnt autoformat the lines above on to multiple lines
@@ -345,26 +367,26 @@ impl UIThread {
                             .unwrap();
                         edges_state
                             .blocking_write()
-                            .update_window(2, &self.connection_gui.main_win);
+                            .update_window(WindowId::Connection, &self.connection_gui.main_win);
                     }
                     UIEvent::BtnQueue => {
                         self.queue_gui.main_win.show();
                         //ui_tx.send(UIEvent::Update(UIUpdateEvent::UpdateQueue(self.queue.clone())));
                         edges_state
                             .blocking_write()
-                            .update_window(1, &self.queue_gui.main_win);
+                            .update_window(WindowId::Main, &self.queue_gui.main_win);
                     }
                     UIEvent::HideQueue => {
                         self.queue_gui.main_win.hide();
                         edges_state
                             .blocking_write()
-                            .update_window(1, &self.queue_gui.main_win);
+                            .update_window(WindowId::Queue, &self.queue_gui.main_win);
                     }
                     UIEvent::HideConnectionWindow => {
                         self.connection_gui.main_win.hide();
                         edges_state
                             .blocking_write()
-                            .update_window(2, &self.connection_gui.main_win);
+                            .update_window(WindowId::Connection, &self.connection_gui.main_win);
                     }
                     UIEvent::ShowPrefsWindow => {
                         self.prefs_gui.main_win.show();
@@ -666,7 +688,7 @@ fn handle_window_drag(
                     .iter()
                     .enumerate()
                     // don't snap to ourself
-                    .filter_map(|(i, o)| if i == id { None } else { Some(o) })
+                    .filter_map(|(i, o)| if i == id as usize { None } else { Some(o) })
                     // don't snap to non-visible windows
                     .filter(|e| e.shown);
 
