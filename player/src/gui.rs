@@ -94,6 +94,7 @@ pub enum UIEvent {
 
     Update(UIUpdateEvent),
     ConnectionDlg(ConnectionDlgEvent),
+    ReFrontAll(WindowId),
 }
 
 #[derive(Debug, Clone)]
@@ -168,9 +169,10 @@ struct WindowEdges {
     height: i32,
 
     shown: bool,
+    wants_front: bool,
 }
 impl WindowEdges {
-    fn update(&mut self, win: &DoubleWindow) {
+    fn update(&mut self, win: &mut DoubleWindow) {
         self.left = win.x();
         self.right = win.x() + win.width();
         self.top = win.y();
@@ -179,20 +181,32 @@ impl WindowEdges {
         self.width = win.width();
         self.height = win.height();
 
-        self.shown = win.visible();
+        self.shown = win.shown();
+        if self.wants_front && self.shown {
+            win.show();
+            self.wants_front = false;
+        }
     }
 }
 
 #[derive(Default)]
 struct AllWindowEdges([WindowEdges; 3]);
 impl AllWindowEdges {
-    fn update_window(&mut self, id: WindowId, win: &DoubleWindow) {
+    fn update_window(&mut self, id: WindowId, win: &mut DoubleWindow) {
         self.0[id as usize].update(win);
+    }
+    fn front(&mut self, id: WindowId) {
+        self.0[id as usize].wants_front = true;
+    }
+    fn front_all(&mut self) {
+        for w in &mut self.0 {
+            w.wants_front = w.shown;
+        }
     }
 }
 
-#[derive(Clone, Copy)]
-enum WindowId {
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum WindowId {
     Main = 0,
     Queue = 1,
     Connection = 2,
@@ -284,9 +298,9 @@ impl UIThread {
         }
 
         let mut edges_state = AllWindowEdges::default();
-        edges_state.update_window(WindowId::Main, &self.gui.main_win);
-        edges_state.update_window(WindowId::Queue, &self.queue_gui.main_win);
-        edges_state.update_window(WindowId::Connection, &self.connection_gui.main_win);
+        edges_state.update_window(WindowId::Main, &mut self.gui.main_win);
+        edges_state.update_window(WindowId::Queue, &mut self.queue_gui.main_win);
+        edges_state.update_window(WindowId::Connection, &mut self.connection_gui.main_win);
 
         let e = Arc::new(RwLock::new(edges_state));
 
@@ -368,26 +382,26 @@ impl UIThread {
                             .unwrap();
                         edges_state
                             .blocking_write()
-                            .update_window(WindowId::Connection, &self.connection_gui.main_win);
+                            .update_window(WindowId::Connection, &mut self.connection_gui.main_win);
                     }
                     UIEvent::BtnQueue => {
                         self.queue_gui.main_win.show();
                         //ui_tx.send(UIEvent::Update(UIUpdateEvent::UpdateQueue(self.queue.clone())));
                         edges_state
                             .blocking_write()
-                            .update_window(WindowId::Main, &self.queue_gui.main_win);
+                            .update_window(WindowId::Main, &mut self.queue_gui.main_win);
                     }
                     UIEvent::HideQueue => {
                         self.queue_gui.main_win.hide();
                         edges_state
                             .blocking_write()
-                            .update_window(WindowId::Queue, &self.queue_gui.main_win);
+                            .update_window(WindowId::Queue, &mut self.queue_gui.main_win);
                     }
                     UIEvent::HideConnectionWindow => {
                         self.connection_gui.main_win.hide();
                         edges_state
                             .blocking_write()
-                            .update_window(WindowId::Connection, &self.connection_gui.main_win);
+                            .update_window(WindowId::Connection, &mut self.connection_gui.main_win);
                     }
                     UIEvent::ShowPrefsWindow => {
                         self.prefs_gui.main_win.show();
@@ -400,6 +414,30 @@ impl UIThread {
                     }
                     UIEvent::SwitchPrefsPage(path) => {
                         self.prefs_gui.switch_page(&path);
+                    }
+                    UIEvent::ReFrontAll(from_id) => {
+                        let mut es = edges_state.blocking_write();
+                        let all_ids = vec![
+                            (WindowId::Queue, &mut self.queue_gui.main_win),
+                            (WindowId::Connection, &mut self.connection_gui.main_win),
+                            (WindowId::Main, &mut self.gui.main_win),
+                        ];
+                        {
+                            let non_last_ids = all_ids.into_iter().filter(|x| x.0 != from_id);
+
+                            for (id, win) in non_last_ids {
+                                es.update_window(id, win);
+                            }
+                        }
+                        // and then
+                        let all_ids = vec![
+                            (WindowId::Queue, &mut self.queue_gui.main_win),
+                            (WindowId::Connection, &mut self.connection_gui.main_win),
+                            (WindowId::Main, &mut self.gui.main_win),
+                        ];
+                        let (last_id, last_win) =
+                            all_ids.into_iter().find(|x| x.0 == from_id).unwrap();
+                        es.update_window(last_id, last_win);
                     }
                     UIEvent::Quit => break,
                     _ => {}
@@ -666,6 +704,12 @@ fn handle_window_drag(
             state.x = coords.0;
             state.y = coords.1;
 
+            if let Some(id) = state.id {
+                edges.blocking_write().front_all();
+                ui_send!(UIEvent::ReFrontAll(id));
+                // bwehh i know.. sending ui events from a handler.. but how else do i get out of here
+            }
+
             true
         }
         fltk::enums::Event::Drag => {
@@ -801,6 +845,7 @@ fn handle_window_drag(
             if let Some(id) = state.id {
                 let mut edges = edges.blocking_write();
                 edges.update_window(id, w);
+                edges.front(id); // single front on drag seems to be needed for edge cases that idk
             }
 
             true
