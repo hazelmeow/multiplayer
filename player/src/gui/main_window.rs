@@ -114,11 +114,16 @@ impl MainWindow {
 
                 true
             }
+            fltk::enums::Event::Drag => {
+                ui_send!(UIEvent::SeekBarMoved(sb.value() as f32));
+
+                true
+            }
             fltk::enums::Event::Released => {
                 let mut d = seek_bar_dragging2.blocking_lock();
                 *d = false;
 
-                ui_send!(UIEvent::SeekBar(sb.value() as f32));
+                ui_send!(UIEvent::SeekBarFinished(sb.value() as f32));
 
                 true
             }

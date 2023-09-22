@@ -81,7 +81,8 @@ pub enum UIEvent {
     VolumeSlider(f32),
     VolumeUp,
     VolumeDown,
-    SeekBar(f32),
+    SeekBarMoved(f32),
+    SeekBarFinished(f32),
     DroppedFiles(String),
     HideQueue,
     HideConnectionWindow,
@@ -413,7 +414,6 @@ impl UIThread {
                 self.gui.reset();
 
                 self.update_status();
-                self.update_right_status();
             }
             UIUpdateEvent::SetTime(elapsed, total) => {
                 // TODO: switch between elapsed and remaining on there
@@ -452,8 +452,6 @@ impl UIThread {
                 }
             }
             UIUpdateEvent::UserListChanged => {
-                self.update_right_status();
-
                 let s = self.state.blocking_read();
 
                 self.gui.users.clear();
@@ -476,11 +474,12 @@ impl UIThread {
                 } else {
                     // not connected
                 }
+
+                drop(s);
+                self.update_status();
             }
             UIUpdateEvent::RoomChanged => {}
             UIUpdateEvent::QueueChanged => {
-                self.update_right_status();
-
                 let s = self.state.blocking_read();
 
                 self.queue_gui.queue_browser.clear();
@@ -547,8 +546,7 @@ impl UIThread {
                 }
 
                 drop(s);
-
-                self.update_right_status();
+                self.update_status();
             }
             UIUpdateEvent::UpdateConnectionTree(list) => {
                 self.connection_gui.populate(list);
@@ -562,21 +560,6 @@ impl UIThread {
         }
     }
 
-    fn update_right_status(&mut self) {
-        let s = self.state.blocking_read();
-
-        let (users, queue) = s
-            .connection
-            .as_ref()
-            .and_then(|c| c.room.as_ref())
-            .map(|r| (r.connected_users.len(), r.queue.len()))
-            .unwrap_or_default();
-
-        self.gui
-            .status_right_display
-            .set_label(&format!("U{:0>2} Q{:0>2}", users, queue));
-    }
-
     // set status based on state and priorities
     fn update_status(&mut self) {
         let status = self.get_status();
@@ -585,21 +568,11 @@ impl UIThread {
         // and the little thingy too
         let play_status = self.get_play_status();
         self.gui.play_status.update(play_status);
-    }
 
-    fn get_play_status(&self) -> PlayStatusIcon {
-        let state = self.state.blocking_read();
-
-        // i love shared and reusable logic ^-^
-        if state.is_stopped() {
-            PlayStatusIcon::Stop
-        } else if state.is_paused() {
-            PlayStatusIcon::Pause
-        } else if state.is_transmitter() {
-            PlayStatusIcon::PlayTx
-        } else {
-            PlayStatusIcon::PlayRx
-        }
+        // and probably just do the right status at the same time too
+        // if we really want fine grained updates then we should do something else
+        let right_status = self.get_right_status();
+        self.gui.status_right_display.set_label(&right_status);
     }
 
     fn get_status(&self) -> String {
@@ -646,6 +619,38 @@ impl UIThread {
         } else {
             "<not connected>".to_string()
         }
+    }
+
+    fn get_play_status(&self) -> PlayStatusIcon {
+        let state = self.state.blocking_read();
+
+        // i love shared and reusable logic ^-^
+        if state.is_stopped() {
+            PlayStatusIcon::Stop
+        } else if state.is_paused() {
+            PlayStatusIcon::Pause
+        } else if state.is_transmitter() {
+            PlayStatusIcon::PlayTx
+        } else {
+            PlayStatusIcon::PlayRx
+        }
+    }
+
+    fn get_right_status(&self) -> String {
+        let s = self.state.blocking_read();
+
+        if let Some(seek_pos) = s.seek_position {
+            return format!("[{}]", min_secs(seek_pos));
+        }
+
+        let (users, queue) = s
+            .connection
+            .as_ref()
+            .and_then(|c| c.room.as_ref())
+            .map(|r| (r.connected_users.len(), r.queue.len()))
+            .unwrap_or_default();
+
+        format!("U{:0>2} Q{:0>2}", users, queue)
     }
 }
 

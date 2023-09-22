@@ -67,6 +67,7 @@ pub struct State {
     connection: Option<ConnectionState>,
 
     loading_count: usize,
+    seek_position: Option<f32>,
 }
 
 #[derive(Debug)]
@@ -154,6 +155,7 @@ impl MainThread {
             preferences: prefs,
             loading_count: 0,
             connection: None,
+            seek_position: None,
         }));
 
         let ui_rx = UIThread::spawn(state.clone());
@@ -277,12 +279,22 @@ impl MainThread {
                             conn.send(Message::PlaybackCommand(PlaybackCommand::Prev)).unwrap();
                         }
 
-                        UIEvent::SeekBar(progress) => {
-                            let Some(conn) = self.connection.as_mut() else { continue };
-
-                            let state = self.state.read().await;
+                        UIEvent::SeekBarMoved(progress) => {
+                            let mut state = self.state.write().await;
                             if let Some(track) = state.current_track() {
                                 let secs = track.metadata.duration * progress;
+                                state.seek_position = Some(secs);
+                                ui_update!(UIUpdateEvent::Status);
+                            }
+                        }
+                        UIEvent::SeekBarFinished(progress) => {
+                            let Some(conn) = self.connection.as_mut() else { continue };
+
+                            let mut state = self.state.write().await;
+                            if let Some(track) = state.current_track() {
+                                let secs = track.metadata.duration * progress;
+                                state.seek_position = None;
+                                ui_update!(UIUpdateEvent::Status);
                                 conn.send(Message::PlaybackCommand(PlaybackCommand::SeekTo(secs))).unwrap();
                             }
                         }
