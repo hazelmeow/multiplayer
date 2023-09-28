@@ -92,6 +92,8 @@ impl PrefsWindow {
         .map(|x| (x.0, x.1))
         .collect();
 
+        main_win.end(); // lol
+
         Self {
             main_win,
             tree,
