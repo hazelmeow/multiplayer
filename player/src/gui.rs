@@ -1,8 +1,9 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use fltk::app;
-use fltk::app::App;
 use fltk::app::Receiver;
+use fltk::app::{App, MouseButton};
 use fltk::button::*;
 use fltk::draw;
 use fltk::enums::*;
@@ -23,6 +24,8 @@ pub mod main_window;
 pub mod preferences_window;
 pub mod queue_window;
 
+pub mod context_menu;
+
 pub mod bitrate_bar;
 pub mod group_box;
 pub mod marquee_label;
@@ -37,6 +40,7 @@ use self::main_window::*;
 use self::play_status::PlayStatusIcon;
 use self::preferences_window::PrefsWindow;
 use self::queue_window::QueueWindow;
+use crate::gui::context_menu::{ContextMenu, ContextMenuContent};
 
 /// Get the global FLTK sender
 macro_rules! sender {
@@ -90,6 +94,9 @@ pub enum UIEvent {
     PleaseSavePreferencesWithThisData,
     SavePreferences { name: String },
     SwitchPrefsPage(String),
+    PopContextMenu((i32, i32)),
+    ContextMenuSelected(usize),
+    ContextMenuUnfocus,
     Quit,
 
     Update(UIUpdateEvent),
@@ -156,6 +163,8 @@ pub struct UIThread {
     queue_gui: QueueWindow,
     connection_gui: ConnectionWindow,
     prefs_gui: PrefsWindow,
+
+    context_menu: ContextMenu,
 }
 
 #[derive(Default, Debug)]
@@ -259,6 +268,8 @@ impl UIThread {
         // blehhhh this is all such a mess
         gui.volume_slider.set_value(0.5);
 
+        let context_menu = ContextMenu::new();
+
         UIThread {
             app,
             receiver,
@@ -270,6 +281,8 @@ impl UIThread {
             queue_gui,
             connection_gui,
             prefs_gui,
+
+            context_menu,
         }
     }
 
@@ -414,6 +427,27 @@ impl UIThread {
                     }
                     UIEvent::SwitchPrefsPage(path) => {
                         self.prefs_gui.switch_page(&path);
+                    }
+                    UIEvent::PopContextMenu(coords) => {
+                        let content = ContextMenuContent {
+                            items: vec![
+                                (
+                                    "Connect to Server".into(),
+                                    UIEvent::BtnOpenConnectionDialog,
+                                    false,
+                                ),
+                                ("Preferences".into(), UIEvent::ShowPrefsWindow, true),
+                                ("Quit".into(), UIEvent::Quit, false),
+                            ],
+                        };
+                        self.context_menu.pop(coords, content);
+                    }
+                    UIEvent::ContextMenuSelected(temp_idx) => {
+                        self.context_menu.hide();
+                        dbg!(temp_idx);
+                    }
+                    UIEvent::ContextMenuUnfocus => {
+                        self.context_menu.hide();
                     }
                     UIEvent::ReFrontAll(from_id) => {
                         let mut es = edges_state.blocking_write();
@@ -715,6 +749,9 @@ fn handle_window_drag(
         fltk::enums::Event::Drag => {
             // to only drag on title bar:
             //if y < 20 { logic } else return false
+            if app::event_mouse_button() == MouseButton::Right {
+                return false;
+            };
 
             let mut x = app::event_x_root() - state.x;
             let mut y = app::event_y_root() - state.y;
@@ -909,6 +946,16 @@ fn handle_volume_scroll(_w: &mut DoubleWindow, ev: Event) -> bool {
 
 fn handle_window_misc(_w: &mut DoubleWindow, ev: Event) -> bool {
     match ev {
+        Event::Push => {
+            if app::event_mouse_button() == MouseButton::Right {
+                let x = app::event_x_root();
+                let y = app::event_y_root();
+                ui_send!(UIEvent::PopContextMenu((x, y)));
+                true
+            } else {
+                false
+            }
+        }
         fltk::enums::Event::Shortcut => {
             let key = app::event_key();
             let f1: bool = key.bits() == Key::F1.bits();
