@@ -6,6 +6,7 @@ use fltk::draw::measure;
 use fltk::enums::*;
 use fltk::frame;
 use fltk::frame::*;
+use fltk::group::Group;
 use fltk::prelude::*;
 use fltk::widget_extends;
 use fltk::window::*;
@@ -16,6 +17,7 @@ use winapi::um::winuser::SetActiveWindow;
 pub struct ContextMenu {
     pub win: Window,
     pub content: Option<ContextMenuContent>,
+    group: Group,
 }
 
 impl ContextMenu {
@@ -32,12 +34,22 @@ impl ContextMenu {
             }
             _ => false,
         });
-        Self { win, content: None }
+
+        let grp = Group::new(0, 0, 1000, 1000, "");
+        win.add(&grp);
+        win.end();
+
+        Self {
+            win,
+            content: None,
+            group: grp,
+        }
     }
 
     pub fn pop(&mut self, coords: (i32, i32), content: ContextMenuContent) {
         self.win.set_pos(coords.0, coords.1);
         self.content = Some(content);
+        self.group.clear();
         self.render();
         self.win.show();
         unsafe {
@@ -47,12 +59,12 @@ impl ContextMenu {
 
     fn render(&mut self) {
         assert!(self.content.is_some());
-        let mut width = 60;
+        let mut width = 10;
         let height = 20; // cuz idk
         let sep_height = 5;
         let mut sep_count = 0;
         let content = self.content.as_ref().unwrap();
-        let mut items: Vec<ContextMenuItem> = vec![];
+        let mut items = vec![];
         for (i, (text, action, sep_next)) in content.items.iter().enumerate() {
             // render
             // also figure out width for later
@@ -84,7 +96,7 @@ impl ContextMenu {
                 }
                 _ => false,
             });
-            self.win.add(&*item);
+            self.group.add(&*item);
             items.push(item);
             // and height
             if *sep_next {
@@ -92,7 +104,6 @@ impl ContextMenu {
             }
         }
         width += 6;
-
         self.win.resize(
             self.win.x(),
             self.win.y(),
