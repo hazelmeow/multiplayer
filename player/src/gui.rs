@@ -1004,7 +1004,7 @@ fn handle_volume_scroll(_w: &mut DoubleWindow, ev: Event) -> bool {
 
 fn handle_window_misc(_w: &mut DoubleWindow, ev: Event) -> bool {
     match ev {
-        Event::Push => {
+        Event::Released => {
             if app::event_mouse_button() == MouseButton::Right {
                 let x = app::event_x_root();
                 let y = app::event_y_root();
