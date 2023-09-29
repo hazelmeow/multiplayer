@@ -527,16 +527,20 @@ impl UIThread {
                 if let Some(t) = self.state.blocking_read().current_track() {
                     if let Some(lyrics) = &t.metadata.lyrics {
                         let current_ms = (elapsed * 1000.0) as usize;
-                        let mut set = false;
-                        for (ts, line) in lyrics.lines.iter().rev() {
-                            if current_ms > *ts {
-                                set = true;
-                                self.lyric_gui.lyric_display.update(line, false);
-                                break;
+                        if current_ms == 0 {
+                            self.lyric_gui.lyric_display.clear();
+                        } else {
+                            let mut set = false;
+                            for (ts, line) in lyrics.lines.iter().rev() {
+                                if current_ms > *ts {
+                                    set = true;
+                                    self.lyric_gui.lyric_display.update(line, false);
+                                    break;
+                                }
                             }
-                        }
-                        if !set {
-                            self.lyric_gui.lyric_display.update("♪", true);
+                            if !set {
+                                self.lyric_gui.lyric_display.update("♪", true);
+                            }
                         }
                     }
                 } else {
