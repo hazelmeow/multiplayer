@@ -273,7 +273,7 @@ impl ConnectionActor {
                         AudioStatus::Elapsed(elapsed) => {
                             let s = self.state.read().await;
                             let total = s.current_track().expect("weird state").metadata.duration;
-                            ui_update!(UIUpdateEvent::SetTime(elapsed as f32, total));
+                            ui_update!(UIUpdateEvent::SetTime(elapsed as f32 / 1000.0, total));
                         }
                         AudioStatus::Buffering(is_buffering) => {
                             let mut s = self.state.write().await;

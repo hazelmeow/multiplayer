@@ -130,13 +130,13 @@ impl Player {
         let buffer = self.buffer.lock().unwrap();
         buffer.len() > 48000 * 2 * SECONDS // 1s of stereo 48k
     }
-    pub fn get_seconds_elapsed(&self) -> u32 {
+    pub fn get_milliseconds_elapsed(&self) -> u32 {
         const SECONDS: u32 = 1;
 
         // 960 = 2 channels * 480 samples per frame
         let samples_received = self.last_frame.unwrap_or_default() * 480;
         let current_sample = samples_received.saturating_sub(48000 * SECONDS);
-        current_sample.max(0) / 48000
+        current_sample.max(0) / 48
     }
     pub fn get_visualizer_buffer(&mut self) -> Option<[f32; 4096]> {
         let buf = self.buffer.lock().unwrap();
@@ -321,7 +321,7 @@ impl AudioThread {
 
                     let _ = self
                         .tx
-                        .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()));
+                        .send(AudioStatus::Elapsed(self.p.get_milliseconds_elapsed()));
                     let _ = self.tx.send(AudioStatus::Buffer(self.p.buffer_status()));
 
                     if self.p.is_empty() {
@@ -347,7 +347,7 @@ impl AudioThread {
                     if frame.frame % 10 == 0 {
                         let _ = self
                             .tx
-                            .send(AudioStatus::Elapsed(self.p.get_seconds_elapsed()));
+                            .send(AudioStatus::Elapsed(self.p.get_milliseconds_elapsed()));
                         let _ = self.tx.send(AudioStatus::Buffer(self.p.buffer_status()));
                     }
 
