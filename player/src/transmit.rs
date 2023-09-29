@@ -165,10 +165,8 @@ impl AudioInfoReader {
             let mut buffer = String::new();
             let mut f = File::open(&lyrics_path).unwrap();
             f.read_to_string(&mut buffer).unwrap();
-            let lines: Vec<(usize, String)> = buffer
-                .lines()
-                .map(|l| crate::lrc::parse_line(l).unwrap())
-                .collect();
+            let lines: Vec<(usize, String)> =
+                buffer.lines().filter_map(crate::lrc::parse_line).collect();
             track_md.lyrics = Some(protocol::Lyrics { lines });
         }
 
