@@ -8,6 +8,7 @@ mod connection;
 mod dnd_resolver;
 mod gui;
 mod key;
+mod lrc;
 mod preferences;
 mod transmit;
 

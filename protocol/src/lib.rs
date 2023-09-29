@@ -37,6 +37,11 @@ pub enum TrackArt {
     Jpeg(Vec<u8>),
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Lyrics {
+    pub lines: Vec<(usize, String)>, // timestamp in ms
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct TrackMetadata {
     pub duration: f32,
@@ -46,6 +51,7 @@ pub struct TrackMetadata {
     pub album: Option<String>,
     pub album_artist: Option<String>,
     pub art: Option<TrackArt>,
+    pub lyrics: Option<Lyrics>, // seems ok to put this here but idk
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

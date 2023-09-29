@@ -1,6 +1,7 @@
 use std::collections::VecDeque;
 use std::error::Error;
-use std::io::Cursor;
+use std::fs::File;
+use std::io::{Cursor, Read};
 use std::path::PathBuf;
 
 use image::imageops::FilterType;
@@ -27,6 +28,7 @@ pub struct AudioInfoReader {
     probe_result: ProbeResult,
     decoder: Box<dyn Decoder>,
     filename: String,
+    path: PathBuf,
 }
 
 impl AudioInfoReader {
@@ -70,6 +72,7 @@ impl AudioInfoReader {
             probe_result,
             decoder,
             filename,
+            path: path.to_owned(),
         })
     }
 
@@ -144,6 +147,23 @@ impl AudioInfoReader {
 
         if track_md.title.is_none() {
             track_md.title = Some(self.filename.clone());
+        }
+
+        // lyrics
+        // lazily search for lrc file assuming it's the same
+        // (we're gonna glob it or something eventually)
+        let lyrics_path = self.path.with_extension("lrc");
+        if lyrics_path.exists() {
+            // epic
+            println!("has lyrics!");
+            let mut buffer = String::new();
+            let mut f = File::open(&lyrics_path).unwrap();
+            f.read_to_string(&mut buffer).unwrap();
+            let lines: Vec<(usize, String)> = buffer
+                .lines()
+                .map(|l| crate::lrc::parse_line(l).unwrap())
+                .collect();
+            track_md.lyrics = Some(protocol::Lyrics { lines });
         }
 
         Ok((spec.rate, spec.channels.count(), track_md))

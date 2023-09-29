@@ -20,6 +20,7 @@ use protocol::PlaybackState;
 use protocol::TrackArt;
 
 pub mod connection_window;
+pub mod lyric_window;
 pub mod main_window;
 pub mod preferences_window;
 pub mod queue_window;
@@ -36,6 +37,7 @@ use crate::preferences::Server;
 use crate::State;
 
 use self::connection_window::ConnectionWindow;
+use self::lyric_window::LyricWindow;
 use self::main_window::*;
 use self::play_status::PlayStatusIcon;
 use self::preferences_window::PrefsWindow;
@@ -94,6 +96,7 @@ pub enum UIEvent {
     PleaseSavePreferencesWithThisData,
     SavePreferences { name: String },
     SwitchPrefsPage(String),
+    ShowLyricWindow(bool),
     PopContextMenu((i32, i32)),
     ContextMenuSelected(usize),
     ContextMenuUnfocus,
@@ -163,6 +166,7 @@ pub struct UIThread {
     queue_gui: QueueWindow,
     connection_gui: ConnectionWindow,
     prefs_gui: PrefsWindow,
+    lyric_gui: LyricWindow,
 
     context_menu: ContextMenu,
 }
@@ -199,7 +203,7 @@ impl WindowEdges {
 }
 
 #[derive(Default)]
-struct AllWindowEdges([WindowEdges; 3]);
+struct AllWindowEdges([WindowEdges; 4]);
 impl AllWindowEdges {
     fn update_window(&mut self, id: WindowId, win: &mut DoubleWindow) {
         self.0[id as usize].update(win);
@@ -219,6 +223,7 @@ pub enum WindowId {
     Main = 0,
     Queue = 1,
     Connection = 2,
+    Lyric = 3,
 }
 
 impl UIThread {
@@ -251,7 +256,9 @@ impl UIThread {
         let queue_gui = QueueWindow::make_window();
         let connection_gui = ConnectionWindow::make_window(state.clone());
         let mut prefs_gui = PrefsWindow::make_window();
-        //prefs_gui.main_win.show();
+        let mut lyric_gui = LyricWindow::make_window();
+        lyric_gui.main_win.show();
+        lyric_gui.position(&gui.main_win);
         prefs_gui.load_state(&state.blocking_read().preferences);
 
         // stuff for cool custom titlebars
@@ -281,6 +288,7 @@ impl UIThread {
             queue_gui,
             connection_gui,
             prefs_gui,
+            lyric_gui,
 
             context_menu,
         }
@@ -333,6 +341,12 @@ impl UIThread {
             &mut self.connection_gui.main_win,
             false,
             Some(WindowId::Connection),
+            e.clone(),
+        );
+        handle_window(
+            &mut self.lyric_gui.main_win,
+            false,
+            Some(WindowId::Lyric),
             e.clone(),
         );
         //handle_window(&mut self.prefs_gui.main_win, true, None, e.clone());
@@ -428,6 +442,13 @@ impl UIThread {
                     UIEvent::SwitchPrefsPage(path) => {
                         self.prefs_gui.switch_page(&path);
                     }
+                    UIEvent::ShowLyricWindow(show) => {
+                        if show {
+                            self.lyric_gui.main_win.show();
+                        } else {
+                            self.lyric_gui.main_win.hide();
+                        }
+                    }
                     UIEvent::PopContextMenu(coords) => {
                         let content = ContextMenuContent {
                             items: vec![
@@ -435,6 +456,16 @@ impl UIThread {
                                     "Connect to Server".into(),
                                     UIEvent::BtnOpenConnectionDialog,
                                     false,
+                                ),
+                                (
+                                    if self.lyric_gui.main_win.shown() {
+                                        "Hide Lyrics Viewer"
+                                    } else {
+                                        "Show Lyrics Viewer"
+                                    }
+                                    .into(),
+                                    UIEvent::ShowLyricWindow(!self.lyric_gui.main_win.shown()),
+                                    true,
                                 ),
                                 ("Preferences".into(), UIEvent::ShowPrefsWindow, true),
                                 ("Quit".into(), UIEvent::Quit, false),
@@ -455,6 +486,7 @@ impl UIThread {
                             (WindowId::Queue, &mut self.queue_gui.main_win),
                             (WindowId::Connection, &mut self.connection_gui.main_win),
                             (WindowId::Main, &mut self.gui.main_win),
+                            (WindowId::Lyric, &mut self.lyric_gui.main_win),
                         ];
                         {
                             let non_last_ids = all_ids.into_iter().filter(|x| x.0 != from_id);
@@ -468,6 +500,7 @@ impl UIThread {
                             (WindowId::Queue, &mut self.queue_gui.main_win),
                             (WindowId::Connection, &mut self.connection_gui.main_win),
                             (WindowId::Main, &mut self.gui.main_win),
+                            (WindowId::Lyric, &mut self.lyric_gui.main_win),
                         ];
                         let (last_id, last_win) =
                             all_ids.into_iter().find(|x| x.0 == from_id).unwrap();
@@ -490,6 +523,27 @@ impl UIThread {
             UIUpdateEvent::SetTime(elapsed, total) => {
                 // TODO: switch between elapsed and remaining on there
                 self.gui.lbl_time.set_label(&min_secs(elapsed));
+
+                // this goes here because it's the only place we know elapsed time
+                if let Some(t) = self.state.blocking_read().current_track() {
+                    if let Some(lyrics) = &t.metadata.lyrics {
+                        let current_ms = (elapsed * 1000.0) as usize;
+                        let mut set = false;
+                        for (ts, line) in lyrics.lines.iter().rev() {
+                            if current_ms > *ts {
+                                set = true;
+                                self.lyric_gui.lyric_display.update(line, false);
+                                break;
+                            }
+                        }
+                        if !set {
+                            self.lyric_gui.lyric_display.update("♪", true);
+                        }
+                    }
+                } else {
+                    self.lyric_gui.lyric_display.update("no lyrics", true);
+                }
+
                 let progress = {
                     if total == 0.0 {
                         0.0
@@ -522,6 +576,7 @@ impl UIThread {
                 if self.gui.lbl_title.waited_long_enough() {
                     self.gui.lbl_title.nudge(-4);
                 }
+                self.lyric_gui.lyric_display.tick();
             }
             UIUpdateEvent::UserListChanged => {
                 let s = self.state.blocking_read();
