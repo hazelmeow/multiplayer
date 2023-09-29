@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::error::Error;
 use std::fs::File;
 use std::io::{Cursor, Read};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use image::imageops::FilterType;
 use opus::Encoder;
@@ -150,9 +150,15 @@ impl AudioInfoReader {
         }
 
         // lyrics
-        // lazily search for lrc file assuming it's the same
-        // (we're gonna glob it or something eventually)
-        let lyrics_path = self.path.with_extension("lrc");
+        // lazily search for lrc file assuming it's the same name and stuff
+        let cwd = self.path.parent().unwrap();
+        let lyrics_path = if cwd.join("lyrics").is_dir() {
+            cwd.join("lyrics")
+                .join(self.path.file_name().unwrap())
+                .with_extension("lrc")
+        } else {
+            self.path.with_extension("lrc")
+        };
         if lyrics_path.exists() {
             // epic
             println!("has lyrics!");
