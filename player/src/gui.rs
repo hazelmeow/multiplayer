@@ -257,7 +257,6 @@ impl UIThread {
         let connection_gui = ConnectionWindow::make_window(state.clone());
         let mut prefs_gui = PrefsWindow::make_window();
         let mut lyric_gui = LyricWindow::make_window();
-        lyric_gui.main_win.show();
         lyric_gui.position(&gui.main_win);
         prefs_gui.load_state(&state.blocking_read().preferences);
 
