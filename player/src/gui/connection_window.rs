@@ -37,6 +37,7 @@ impl ConnectionWindow {
             &mut main_win,
             UIEvent::HideConnectionWindow,
             "Connect to Server",
+            false,
         );
         main_win.set_border(false);
 

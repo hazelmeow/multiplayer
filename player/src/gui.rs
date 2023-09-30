@@ -1062,7 +1062,7 @@ fn create_horizontal_gradient_frame(
     frame
 }
 
-fn add_bar(win: &mut DoubleWindow, close_message: UIEvent, title: &str) {
+fn add_bar(win: &mut DoubleWindow, close_message: UIEvent, title: &str, with_icon: bool) {
     let mut bar = Group::new(3, 3, win.width() - 8, 17, "");
     let mut bar_bg = create_horizontal_gradient_frame(
         3,
@@ -1072,16 +1072,18 @@ fn add_bar(win: &mut DoubleWindow, close_message: UIEvent, title: &str) {
         Color::from_rgb(8, 36, 107),    //Color::from_rgb(56, 85, 145),
         Color::from_rgb(165, 203, 247), //Color::from_rgb(166, 202, 240),
     );
-    let mut icon = Group::new(4, 4, 16, 16, "");
-    icon.set_image(Some(
-        fltk::image::PngImage::from_data(include_bytes!("../rsrc/tiny_ryo_2.png")).unwrap(),
-    ));
-    icon.set_align(Align::ImageBackdrop);
+    if with_icon {
+        let mut icon = Group::new(4, 4, 16, 16, "");
+        icon.set_image(Some(
+            fltk::image::PngImage::from_data(include_bytes!("../rsrc/tiny_ryo_2.png")).unwrap(),
+        ));
+        icon.set_align(Align::ImageBackdrop);
 
-    bar.add(&icon);
+        bar.add(&icon);
+    }
 
     let t = title.to_owned();
-    let mut bar_title = Frame::new(20, 3, 100, 17, "").with_label(&t);
+    let mut bar_title = Frame::new(if with_icon { 20 } else { 7 }, 3, 100, 17, "").with_label(&t);
     bar_title.set_align(Align::Left | Align::Inside);
     bar_title.set_label_font(Font::HelveticaBold);
     bar_title.set_label_size(12);

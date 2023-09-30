@@ -51,7 +51,7 @@ impl MainWindow {
         bar_frame.set_color(Color::Background);
         main_win.add(&bar_frame); */
 
-        add_bar(&mut main_win, UIEvent::Quit, "multiplayer :3");
+        add_bar(&mut main_win, UIEvent::Quit, "multiplayer :3", true);
 
         // --- buttons ---
         let buttons_y = 128;

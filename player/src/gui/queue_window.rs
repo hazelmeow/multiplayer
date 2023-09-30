@@ -18,7 +18,7 @@ impl QueueWindow {
         let mut main_win = Window::new(100, 100, 300, 400, "queue");
         main_win.set_frame(FrameType::UpBox);
 
-        add_bar(&mut main_win, UIEvent::HideQueue, "Queue");
+        add_bar(&mut main_win, UIEvent::HideQueue, "Queue", false);
         main_win.set_border(false);
 
         let mut main_grp = Group::new(0, 24, main_win.width(), main_win.height() - 21, "");
