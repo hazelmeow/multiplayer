@@ -536,6 +536,13 @@ impl UIThread {
                                     set = true;
                                     self.lyric_gui.lyric_display.update(line, false);
                                     break;
+                                } else if current_ms + 800 > *ts
+                                    && self.lyric_gui.lyric_display.musicing()
+                                {
+                                    // flash lyrics about to start
+                                    set = true;
+                                    self.lyric_gui.lyric_display.blink();
+                                    break;
                                 }
                             }
                             if !set {

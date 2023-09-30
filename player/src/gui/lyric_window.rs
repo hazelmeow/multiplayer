@@ -40,6 +40,8 @@ pub struct LyricDisplay {
     width: i32,
     tick: usize,
     speed: i32,
+    musicing: bool, // dimdenism
+    blinking: bool,
     centered: Rc<RefCell<bool>>,
     offset: Rc<RefCell<i32>>,
 }
@@ -83,6 +85,8 @@ impl LyricDisplay {
             width: 0,
             tick: 0,
             speed: 4,
+            musicing: false,
+            blinking: false,
             inner,
         }
     }
@@ -92,12 +96,15 @@ impl LyricDisplay {
         }
         if line.chars().next().unwrap_or_default() == '♪' {
             line = "♪ ♪ ♪";
+            self.musicing = true;
             *self.centered.borrow_mut() = true;
         } else {
+            self.musicing = false;
             *self.centered.borrow_mut() = centered;
         }
         *self.offset.borrow_mut() = 0;
         self.tick = 0;
+        self.blinking = false;
         draw::set_font(Font::Helvetica, 16);
         self.width = draw::measure(line, false).0;
         self.speed = self.calc(0);
@@ -108,6 +115,22 @@ impl LyricDisplay {
         self.update("", false);
     }
     pub fn tick(&mut self) {
+        if self.blinking {
+            self.tick += 1;
+            if self.tick % 2 != 0 {
+                // label will ALWAYS be "♪ ♪ ♪" (surely)
+                let f1 = "♪ ♪ ♪";
+                let f2 = "＞＞ ♪ ♪ ♪ ＜＜";
+                self.inner.set_label(if self.inner.label().as_str() == f1 {
+                    f2
+                } else {
+                    f1
+                });
+                self.inner.redraw();
+                return; // don't need to shift
+            }
+        }
+
         if !self.needs_scroll() {
             return;
         }
@@ -123,6 +146,9 @@ impl LyricDisplay {
         *self.offset.borrow_mut() += self.speed;
         self.inner.redraw();
     }
+    pub fn blink(&mut self) {
+        self.blinking = true;
+    }
     fn calc(&self, ms_until_next: usize) -> i32 {
         // perfectly calculate number of pixels to move it so it's timed nicely
         // dbg!(self.width, self.inner.w(), ms_until_next / 30);
@@ -134,5 +160,8 @@ impl LyricDisplay {
     }
     fn needs_scroll(&self) -> bool {
         self.width > self.inner.width()
+    }
+    pub fn musicing(&self) -> bool {
+        self.musicing
     }
 }
