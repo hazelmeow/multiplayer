@@ -438,6 +438,8 @@ impl UIThread {
                         s.preferences.name = PrefItems::val_str(&items.fld_name);
                         s.preferences.lyrics_show_warning_arrows =
                             PrefItems::val_bool(&items.cb_warning_arrows);
+                        s.preferences.display_album_artist =
+                            PrefItems::val_bool(&items.cb_album_artist);
 
                         s.preferences.volume = s.volume;
                         s.preferences.save();

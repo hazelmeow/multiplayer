@@ -21,6 +21,8 @@ const PAGE_X_OFFSET: i32 = 170;
 pub struct PrefItems {
     // General/Identity
     pub fld_name: Option<Input>,
+    // General/Meow
+    pub cb_album_artist: Option<CheckButton>,
     // General/Lyrics
     pub cb_warning_arrows: Option<CheckButton>,
 }
@@ -130,6 +132,7 @@ impl PrefsWindow {
             &mut self.items.cb_warning_arrows,
             p.lyrics_show_warning_arrows,
         );
+        PrefItems::set_bool(&mut self.items.cb_album_artist, p.display_album_artist);
         // TODO: load last page
         self.switch_page("General/Identity");
     }
@@ -200,8 +203,16 @@ impl PrefsWindow {
 
         {
             // CODE CODE CODE, WIDGETS AND SUCH
-            let lbl_1 = Frame::new(30, 30, 0, 0, "meowww");
-            w.add(&lbl_1);
+            let mut g1 = GroupBox::new(0, 8, w.w(), w.h() - 10).with_label("Lyrics Viewer");
+            {
+                let (x, y, w) = (g1.x(), g1.y(), g1.w() - 30);
+                let t = "Show Album Artist (debug)";
+                let cb_album_artist = CheckButton::new(x + 10, y + 30, w, 20, t);
+                g1.add(&cb_album_artist);
+                items.cb_album_artist = Some(cb_album_artist);
+            }
+            g1.end();
+            w.add(&*g1);
         }
 
         w.end();

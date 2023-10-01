@@ -32,6 +32,9 @@ pub struct PreferencesData {
     #[serde(default = "_true")]
     pub lyrics_show_warning_arrows: bool,
 
+    #[serde(default)]
+    pub display_album_artist: bool,
+
     #[serde(default = "default_servers")]
     pub servers: Vec<Server>,
 }
@@ -59,6 +62,7 @@ impl Default for PreferencesData {
             name: default_name(),
             id: generate_id(),
             lyrics_show_warning_arrows: true,
+            display_album_artist: false,
             servers: default_servers(),
         }
     }
