@@ -76,6 +76,45 @@ impl State {
         self.preferences.volume = self.volume;
         self.preferences.save();
     }
+
+    fn current_track(&self) -> Option<&Track> {
+        let Some(connection) = &self.connection else {
+            return None;
+        };
+        let Some(room) = &connection.room else {
+            return None;
+        };
+        room.current_track()
+    }
+
+    fn is_transmitter(&self) -> bool {
+        self.current_track()
+            .map_or(false, |t| t.owner == self.my_id)
+    }
+
+    /// Checks if playback is stopped.
+    /// Returns true if not in a server or room.
+    fn is_stopped(&self) -> bool {
+        let Some(connection) = &self.connection else {
+            return true;
+        };
+        let Some(room) = &connection.room else {
+            return true;
+        };
+        room.playback_state == PlaybackState::Stopped
+    }
+
+    /// Checks if playback is paused.
+    /// Returns false if not in a server or room.
+    fn is_paused(&self) -> bool {
+        let Some(connection) = &self.connection else {
+            return false;
+        };
+        let Some(room) = &connection.room else {
+            return false;
+        };
+        room.playback_state == PlaybackState::Paused
+    }
 }
 
 #[derive(Debug)]
@@ -98,35 +137,6 @@ pub struct RoomState {
     connected_users: HashMap<String, String>,
 
     transmit_thread: Option<TransmitThreadHandle>,
-}
-
-impl State {
-    fn current_track(&self) -> Option<&Track> {
-        let Some(connection) = &self.connection else { return None };
-        let Some(room) = &connection.room else { return None };
-        room.current_track()
-    }
-
-    fn is_transmitter(&self) -> bool {
-        self.current_track()
-            .map_or(false, |t| t.owner == self.my_id)
-    }
-
-    /// Checks if playback is stopped.
-    /// Returns true if not in a server or room.
-    fn is_stopped(&self) -> bool {
-        let Some(connection) = &self.connection else { return true };
-        let Some(room) = &connection.room else { return true };
-        room.playback_state == PlaybackState::Stopped
-    }
-
-    /// Checks if playback is paused.
-    /// Returns false if not in a server or room.
-    fn is_paused(&self) -> bool {
-        let Some(connection) = &self.connection else { return false };
-        let Some(room) = &connection.room else { return false };
-        room.playback_state == PlaybackState::Paused
-    }
 }
 
 impl RoomState {
