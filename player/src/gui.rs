@@ -645,11 +645,12 @@ impl UIThread {
                             self.gui.lbl_title.zero();
 
                             self.gui.lbl_artist.set_label(
-                                track
-                                    .metadata
-                                    .artist
-                                    .as_ref()
-                                    .unwrap_or(&"[unknown artist]".to_string()),
+                                if s.preferences.display_album_artist {
+                                    track.metadata.album_artist.as_ref()
+                                } else {
+                                    track.metadata.artist.as_ref()
+                                }
+                                .unwrap_or(&"[unknown artist]".to_string()),
                             );
 
                             if let Some(art) = &track.metadata.art {
