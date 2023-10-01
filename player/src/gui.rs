@@ -606,9 +606,9 @@ impl UIThread {
 
                         for (id, name) in r.connected_users.iter() {
                             let line = if id == &s.my_id {
-                                "@b* you".to_string()
+                                format!("@b* you ({})", name)
                             } else {
-                                format!("* {} ({})", name, id)
+                                format!("* {}", name)
                             };
                             self.gui.users.add(&line);
                         }
