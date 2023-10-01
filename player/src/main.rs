@@ -45,9 +45,8 @@ async fn main() -> std::io::Result<()> {
     t.run().await;
 
     if !is_temp {
-        let p = &mut t.state.write().await.preferences;
-        p.volume = t.volume;
-        p.save().await;
+        let mut state = t.state.write().await;
+        state.save_volume();
     } else {
         // don't bother saving.. delete even
         std::fs::remove_file(t.state.read().await.preferences.path())?;
@@ -69,6 +68,14 @@ pub struct State {
 
     loading_count: usize,
     seek_position: Option<f32>,
+    volume: f32,
+}
+
+impl State {
+    fn save_volume(&mut self) {
+        self.preferences.volume = self.volume;
+        self.preferences.save();
+    }
 }
 
 #[derive(Debug)]
@@ -134,8 +141,6 @@ struct MainThread {
     connection: Option<ConnectionActorHandle>,
 
     ui_rx: tokio::sync::mpsc::UnboundedReceiver<UIEvent>,
-
-    volume: f32,
 }
 
 impl MainThread {
@@ -157,6 +162,7 @@ impl MainThread {
             loading_count: 0,
             connection: None,
             seek_position: None,
+            volume,
         }));
 
         let ui_rx = UIThread::spawn(state.clone());
@@ -169,8 +175,6 @@ impl MainThread {
             connection: None,
 
             ui_rx,
-
-            volume,
         }
     }
 
@@ -301,25 +305,22 @@ impl MainThread {
                         }
 
                         UIEvent::VolumeSlider(pos) => {
-                            self.volume = pos;
-                            self.try_update_volume();
+                            self.state.write().await.volume = pos;
+                            self.try_update_volume().await;
                         }
                         UIEvent::VolumeUp => {
-                            self.volume = (self.volume + 0.02).min(1.);
-                            ui_update!(UIUpdateEvent::Volume(self.volume));
-                            self.try_update_volume();
+                            let mut state = self.state.write().await;
+                            state.volume = (state.volume + 0.02).min(1.);
+                            ui_update!(UIUpdateEvent::Volume(state.volume));
+                            drop(state);
+                            self.try_update_volume().await;
                         }
                         UIEvent::VolumeDown => {
-                            self.volume = (self.volume - 0.02).max(0.);
-                            ui_update!(UIUpdateEvent::Volume(self.volume));
-                            self.try_update_volume();
-                        }
-                        UIEvent::SavePreferences{name} => {
-                            let mut s = self.state.write().await;
-                            s.preferences.name = name;
-
-                            s.preferences.volume = self.volume;
-                            s.preferences.save().await;
+                            let mut state = self.state.write().await;
+                            state.volume = (state.volume - 0.02).max(0.);
+                            ui_update!(UIUpdateEvent::Volume(state.volume));
+                            drop(state);
+                            self.try_update_volume().await;
                         }
                         UIEvent::Quit => break,
                         _ => {}
@@ -337,9 +338,9 @@ impl MainThread {
         val.powf(3.)
     }
 
-    fn try_update_volume(&mut self) {
+    async fn try_update_volume(&mut self) {
         if let Some(conn) = &mut self.connection {
-            let scaled = Self::volume_scale(self.volume);
+            let scaled = Self::volume_scale(self.state.read().await.volume);
             conn.audio.send(AudioCommand::Volume(scaled)).unwrap();
         }
     }
@@ -349,7 +350,7 @@ impl MainThread {
         match result {
             Ok(c) => {
                 self.connection = Some(c);
-                self.try_update_volume();
+                self.try_update_volume().await;
             }
             Err(e) => {
                 println!("error while connecting: {:?}", e);

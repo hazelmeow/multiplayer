@@ -40,7 +40,7 @@ use self::connection_window::ConnectionWindow;
 use self::lyric_window::LyricWindow;
 use self::main_window::*;
 use self::play_status::PlayStatusIcon;
-use self::preferences_window::PrefsWindow;
+use self::preferences_window::{PrefItems, PrefsWindow};
 use self::queue_window::QueueWindow;
 use crate::gui::context_menu::{ContextMenu, ContextMenuContent};
 
@@ -93,8 +93,7 @@ pub enum UIEvent {
     HideQueue,
     HideConnectionWindow,
     ShowPrefsWindow,
-    PleaseSavePreferencesWithThisData,
-    SavePreferences { name: String },
+    SavePreferences,
     SwitchPrefsPage(String),
     ShowLyricWindow(bool),
     PopContextMenu((i32, i32)),
@@ -432,10 +431,16 @@ impl UIThread {
                     UIEvent::ShowPrefsWindow => {
                         self.prefs_gui.main_win.show();
                     }
-                    UIEvent::PleaseSavePreferencesWithThisData => {
-                        ui_send!(UIEvent::SavePreferences {
-                            name: self.prefs_gui.items.fld_name.as_ref().unwrap().value(),
-                        });
+                    UIEvent::SavePreferences => {
+                        let mut s = self.state.blocking_write();
+                        let items = &self.prefs_gui.items;
+
+                        s.preferences.name = PrefItems::val_str(&items.fld_name);
+                        s.preferences.lyrics_show_warning_arrows =
+                            PrefItems::val_bool(&items.cb_warning_arrows);
+
+                        s.preferences.volume = s.volume;
+                        s.preferences.save();
                         self.prefs_gui.main_win.hide();
                     }
                     UIEvent::SwitchPrefsPage(path) => {
@@ -524,7 +529,8 @@ impl UIThread {
                 self.gui.lbl_time.set_label(&min_secs(elapsed));
 
                 // this goes here because it's the only place we know elapsed time
-                if let Some(t) = self.state.blocking_read().current_track() {
+                let s = self.state.blocking_read();
+                if let Some(t) = s.current_track() {
                     if let Some(lyrics) = &t.metadata.lyrics {
                         let current_ms = (elapsed * 1000.0) as usize;
                         if current_ms == 0 {
@@ -538,6 +544,7 @@ impl UIThread {
                                     break;
                                 } else if current_ms + 800 > *ts
                                     && self.lyric_gui.lyric_display.musicing()
+                                    && s.preferences.lyrics_show_warning_arrows
                                 {
                                     // flash lyrics about to start
                                     set = true;

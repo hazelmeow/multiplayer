@@ -19,7 +19,26 @@ const PAGE_X_OFFSET: i32 = 170;
 
 #[derive(Default)]
 pub struct PrefItems {
+    // General/Identity
     pub fld_name: Option<Input>,
+    // General/Lyrics
+    pub cb_warning_arrows: Option<CheckButton>,
+}
+
+impl PrefItems {
+    pub fn val_str(w: &Option<Input>) -> String {
+        w.as_ref().unwrap().value()
+    }
+    pub fn val_bool(w: &Option<CheckButton>) -> bool {
+        w.as_ref().unwrap().value()
+    }
+
+    fn set_str(w: &mut Option<Input>, v: &str) {
+        w.as_mut().unwrap().set_value(v);
+    }
+    fn set_bool(w: &mut Option<CheckButton>, v: bool) {
+        w.as_mut().unwrap().set_value(v);
+    }
 }
 
 pub struct PrefsWindow {
@@ -35,7 +54,8 @@ impl PrefsWindow {
         let mut main_win = Window::new(100, 100, 450, 300, "multiplayer preferences");
         main_win.make_modal(false); // ???
         main_win.free_position();
-        main_win.emit(sender!(), UIEvent::PleaseSavePreferencesWithThisData);
+        main_win.emit(sender!(), UIEvent::SavePreferences);
+        main_win.set_label_size(10);
 
         let mut tree = Tree::new(10, 10, 150, main_win.h() - 44, "");
         {
@@ -72,17 +92,19 @@ impl PrefsWindow {
             });
             tree.add("General/Identity").unwrap().select_toggle();
             tree.add("General/Meow");
+            tree.add("General/Lyrics");
         }
         main_win.add(&tree);
 
         let mut btn_close = Button::new(10, -1, 150, 21, "Save and Close").below_of(&tree, 4);
-        btn_close.emit(sender!(), UIEvent::PleaseSavePreferencesWithThisData);
+        btn_close.emit(sender!(), UIEvent::SavePreferences);
 
         let mut items = PrefItems::default();
 
         let pages = vec![
             Self::page_general_identity(&mut main_win, &mut items),
             Self::page_general_meow(&mut main_win, &mut items),
+            Self::page_general_lyrics(&mut main_win, &mut items),
         ]
         .into_iter()
         .map(|mut x| {
@@ -103,7 +125,11 @@ impl PrefsWindow {
     }
 
     pub fn load_state(&mut self, p: &PreferencesData) {
-        self.items.fld_name.as_mut().unwrap().set_value(&p.name);
+        PrefItems::set_str(&mut self.items.fld_name, &p.name);
+        PrefItems::set_bool(
+            &mut self.items.cb_warning_arrows,
+            p.lyrics_show_warning_arrows,
+        );
         // TODO: load last page
         self.switch_page("General/Identity");
     }
@@ -176,6 +202,38 @@ impl PrefsWindow {
             // CODE CODE CODE, WIDGETS AND SUCH
             let lbl_1 = Frame::new(30, 30, 0, 0, "meowww");
             w.add(&lbl_1);
+        }
+
+        w.end();
+        win.add(&w);
+        (path.into(), w)
+    }
+
+    fn page_general_lyrics(win: &mut Window, items: &mut PrefItems) -> (String, DoubleWindow) {
+        let path = "General/Lyrics";
+
+        let mut w = DoubleWindow::new(
+            PAGE_X_OFFSET,
+            10,
+            win.w() - PAGE_X_OFFSET - 10,
+            win.h() - 20,
+            "Lyrics Viewer",
+        )
+        .with_label("Lyrics Viewer");
+
+        {
+            let mut g1 = GroupBox::new(0, 8, w.w(), w.h() - 10).with_label("Lyrics Viewer");
+            {
+                let (x, y, w) = (g1.x(), g1.y(), g1.w() - 30);
+                // [ ] Show warning arrows before end of music section
+                let t = "Show warning arrows before end of music section";
+                let cb_warning_arrows = CheckButton::new(x + 10, y + 30, w, 20, t);
+                g1.add(&cb_warning_arrows);
+                items.cb_warning_arrows = Some(cb_warning_arrows);
+                // [ ]
+            }
+            g1.end();
+            w.add(&*g1);
         }
 
         w.end();

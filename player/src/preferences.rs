@@ -15,6 +15,11 @@ pub struct Server {
     pub addr: String,
 }
 
+#[inline]
+fn _true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PreferencesData {
     #[serde(default = "default_volume")]
@@ -23,6 +28,9 @@ pub struct PreferencesData {
     pub name: String,
     #[serde(default = "generate_id")]
     id: String,
+
+    #[serde(default = "_true")]
+    pub lyrics_show_warning_arrows: bool,
 
     #[serde(default = "default_servers")]
     pub servers: Vec<Server>,
@@ -50,6 +58,7 @@ impl Default for PreferencesData {
             volume: default_volume(),
             name: default_name(),
             id: generate_id(),
+            lyrics_show_warning_arrows: true,
             servers: default_servers(),
         }
     }
@@ -134,11 +143,11 @@ impl Preferences {
             inner: PreferencesData::default(),
             path,
         };
-        p.save().await;
+        p.save();
         p
     }
 
-    pub async fn save(&mut self) {
+    pub fn save(&mut self) {
         let json =
             serde_json::to_string_pretty(&self.inner).expect("failed to serialize preferences");
         OpenOptions::new()
