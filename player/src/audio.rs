@@ -7,6 +7,7 @@ use cpal::Stream;
 use opus::Decoder;
 use ringbuf::ring_buffer::RbBase;
 use ringbuf::{LocalRb, Rb};
+use rubato::{InterpolationParameters, Resampler, SincFixedIn};
 use tokio::sync::mpsc;
 use tokio::time::{Instant, Interval};
 
@@ -21,6 +22,7 @@ type Ringbuf<T> = LocalRb<T, Vec<MaybeUninit<T>>>;
 
 pub struct Player {
     decoder: Decoder,
+    resampler: Option<SincFixedIn<f32>>,
     buffer: Arc<Mutex<Ringbuf<f32>>>,
     stream: Option<Stream>,
     volume: Arc<Mutex<f32>>,
@@ -30,6 +32,7 @@ impl Player {
     pub fn new() -> Self {
         Self {
             decoder: Decoder::new(48000, opus::Channels::Stereo).unwrap(),
+            resampler: None,
             buffer: Arc::new(Mutex::new(Ringbuf::<f32>::new(PLAYER_BUFFER_SIZE))),
             stream: None,
             last_frame: None,
@@ -49,8 +52,24 @@ impl Player {
 
         let mut buffer = self.buffer.lock().unwrap();
         if buffer.len() < buffer.free_len() {
-            // copy to ringbuffer
-            buffer.push_slice(&pcm);
+            if let Some(resampler) = &mut self.resampler {
+                // resample first
+                let mut chunk_samples: Vec<Vec<f32>> = vec![Vec::with_capacity(480); 2];
+                for (sample_idx, sample) in pcm.into_iter().enumerate() {
+                    chunk_samples[sample_idx % 2].push(sample);
+                }
+                let resampled = resampler.process(&chunk_samples, None).unwrap();
+                let flat = resampled[0]
+                    .iter()
+                    .copied()
+                    .zip(resampled[1].iter().copied())
+                    .flat_map(|(a, b)| [a, b])
+                    .collect::<Vec<_>>();
+                buffer.push_slice(&flat);
+            } else {
+                // copy decoded packet directly to ringbuffer
+                buffer.push_slice(&pcm);
+            }
         } else {
             // otherwise just discard i guess
             println!("player buffer full... discarding :/")
@@ -66,19 +85,41 @@ impl Player {
             .default_output_device()
             .expect("no output device available");
 
-        let mut supported_configs_range = device
-            .supported_output_configs()
-            .expect("error while querying configs");
-        let supported_config = supported_configs_range
-            .next()
-            .expect("no supported config?!")
-            .with_sample_rate(cpal::SampleRate(48000));
-        // .with_max_sample_rate(); //???
+        let stream_config = {
+            let mut configs = device
+                .supported_output_configs()
+                .expect("error while querying configs");
+
+            let range = configs.next().expect("no supported config?!");
+
+            if range.min_sample_rate().0 <= 48000 && range.max_sample_rate().0 >= 48000 {
+                range.with_sample_rate(cpal::SampleRate(48000))
+            } else {
+                range.with_max_sample_rate()
+            }
+        };
+
+        let sample_rate = stream_config.sample_rate().0;
+
+        if stream_config.sample_rate().0 != 48000 {
+            let params = InterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: rubato::InterpolationType::Linear,
+                oversampling_factor: 256,
+                window: rubato::WindowFunction::BlackmanHarris2,
+            };
+            self.resampler = Some(
+                SincFixedIn::new(sample_rate as f64 / 48000_f64, 1.0, params, 480, 2).unwrap(),
+            );
+        } else {
+            self.resampler = None;
+        }
 
         let err_fn = |err| eprintln!("an error occurred on the output audio stream: {}", err);
-        let sample_format = supported_config.sample_format();
+        let sample_format = stream_config.sample_format();
         println!("sample format is {:?}", sample_format); //?? do we care about other sample formats
-        let config = supported_config.into();
+        let config = stream_config.into();
 
         let buffer_handle = self.buffer.clone();
         let volume_handle = self.volume.clone();
