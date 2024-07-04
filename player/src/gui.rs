@@ -268,7 +268,7 @@ impl UIThread {
 
         // TODO: we'd probably have to communicate this somehow
         //       for now just pretend
-        gui.bitrate_bar.update_bitrate(256);
+        gui.bitrate_bar.update_bitrate(128);
 
         // blehhhh this is all such a mess
         gui.volume_slider.set_value(0.5);

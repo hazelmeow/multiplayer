@@ -273,7 +273,7 @@ impl AudioReader {
 
         let mut encoder =
             opus::Encoder::new(48000, opus::Channels::Stereo, opus::Application::Audio).unwrap();
-        encoder.set_bitrate(opus::Bitrate::Bits(256000)).unwrap();
+        encoder.set_bitrate(opus::Bitrate::Bits(128000)).unwrap();
 
         Ok(Self {
             inner: info_reader,
