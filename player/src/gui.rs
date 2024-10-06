@@ -1,4 +1,3 @@
-use std::ops::Deref;
 use std::sync::Arc;
 
 use fltk::app;
@@ -15,9 +14,10 @@ use fltk::prelude::*;
 use fltk::window::*;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
+use uuid::Uuid;
 
-use protocol::PlaybackState;
 use protocol::TrackArt;
+use protocol::{PlaybackState, RoomOptions};
 
 pub mod connection_window;
 pub mod lyric_window;
@@ -33,8 +33,8 @@ pub mod marquee_label;
 pub mod play_status;
 pub mod visualizer;
 
-use crate::preferences::Server;
-use crate::State;
+use crate::state::{dispatch, dispatch_update, StateChanges, StateUpdate};
+use crate::{Action, State};
 
 use self::connection_window::ConnectionWindow;
 use self::lyric_window::LyricWindow;
@@ -58,22 +58,21 @@ macro_rules! ui_send {
         s.send($expression);
     }};
 }
-/// Send a UIUpdateEvent through the global FLTK sender
-macro_rules! ui_update {
-    ($expression:expr) => {{
-        use crate::gui::UIEvent;
-        let s = fltk::app::Sender::<UIEvent>::get();
-        s.send(UIEvent::Update($expression));
-    }};
-}
+
 pub(crate) use sender;
 pub(crate) use ui_send;
-pub(crate) use ui_update;
 
-// only temporary
+/// Events handled by the UI thread.
+///
+/// Most UIEvents are sent from the UI to itself, often using FLTK's `emit` method.
+/// Some are sent from the main thread (StateChanged).
 #[derive(Debug, Clone)]
 pub enum UIEvent {
-    // handled by main thread
+    StateChanged(StateChanges),
+
+    // TODO: maybe temporary
+    Action(Action),
+
     BtnPlay,
     BtnStop,
     BtnPause,
@@ -82,14 +81,6 @@ pub enum UIEvent {
 
     BtnQueue,
     BtnOpenConnectionDialog,
-    Connect(Server),
-    JoinRoom(u32),
-    VolumeSlider(f32),
-    VolumeUp,
-    VolumeDown,
-    SeekBarMoved(f32),
-    SeekBarFinished(f32),
-    DroppedFiles(String),
     HideQueue,
     HideConnectionWindow,
     ShowPrefsWindow,
@@ -101,27 +92,11 @@ pub enum UIEvent {
     ContextMenuUnfocus,
     Quit,
 
-    Update(UIUpdateEvent),
+    // TODO: it might be good to get rid of this
+    Periodic,
+
     ConnectionDlg(ConnectionDlgEvent),
     ReFrontAll(WindowId),
-}
-
-#[derive(Debug, Clone)]
-pub enum UIUpdateEvent {
-    Reset,
-    SetTime(f32, f32),
-    UserListChanged,
-    RoomChanged,
-    QueueChanged,
-    UpdateConnectionTree(Vec<self::connection_window::ServerStatus>),
-    UpdateConnectionTreePartial(self::connection_window::ServerStatus),
-    ConnectionChanged,
-    Status,
-    Visualizer([u8; 14]),
-    Buffer(u8),
-    Bitrate(u32),
-    Volume(f32),
-    Periodic,
 }
 
 #[derive(Debug, Clone)]
@@ -151,13 +126,13 @@ struct DndState {
     released: bool,
 }
 
-type UiTx = mpsc::UnboundedSender<UIEvent>;
-type UiRx = mpsc::UnboundedReceiver<UIEvent>;
+type ActionTx = mpsc::UnboundedSender<Action>;
+type ActionRx = mpsc::UnboundedReceiver<Action>;
 
 pub struct UIThread {
     app: App,
     receiver: Receiver<UIEvent>,
-    tx: UiTx,
+    tx: ActionTx,
 
     state: Arc<RwLock<State>>,
 
@@ -226,24 +201,9 @@ pub enum WindowId {
 }
 
 impl UIThread {
-    pub fn spawn(state: Arc<RwLock<State>>) -> mpsc::UnboundedReceiver<UIEvent> {
-        // from anywhere to ui (including ui to ui..?)
-        let (_, receiver) = fltk::app::channel::<UIEvent>();
+    pub fn new(state: Arc<RwLock<State>>, tx: ActionTx) -> Self {
+        let receiver = Receiver::get();
 
-        // from main thread logic to ui
-        let (ui_tx, ui_rx) = mpsc::unbounded_channel::<UIEvent>();
-
-        std::thread::spawn(move || {
-            let mut t = UIThread::new(receiver, ui_tx, state);
-            t.run();
-        });
-
-        // ui_rx can't be part of the handle because the handle needs to be clone
-        // only one thing can own and consume from the receiver
-        ui_rx
-    }
-
-    fn new(receiver: Receiver<UIEvent>, tx: UiTx, state: Arc<RwLock<State>>) -> Self {
         let app = fltk::app::App::default();
         let widgets = fltk_theme::WidgetTheme::new(fltk_theme::ThemeType::Classic);
         widgets.apply();
@@ -292,7 +252,7 @@ impl UIThread {
         }
     }
 
-    fn run(&mut self) {
+    pub fn run(&mut self) {
         fn handle_window(
             win: &mut DoubleWindow,
             modal: bool,
@@ -357,17 +317,14 @@ impl UIThread {
 
         while self.app.wait() {
             if let Some(msg) = self.receiver.recv() {
-                // forward event to logic thread for handling
-                // TODO: don't send stuff it doesn't need? like UIUpdateEvent?
-                self.tx.send(msg.clone()).unwrap();
-
                 // only deal with ui-relevant stuff here
                 match msg {
-                    UIEvent::Update(evt) => self.handle_update(evt),
+                    UIEvent::StateChanged(changes) => self.handle_state_changes(changes),
+
                     UIEvent::ConnectionDlg(evt) => match evt {
                         ConnectionDlgEvent::BtnConnect => {
                             if let Some(item) = self.connection_gui.tree.first_selected_item() {
-                                let (maybe_room_id, server): (Option<u32>, Server) =
+                                let (maybe_room_id, server_id): (Option<u32>, Uuid) =
                                     match item.depth() {
                                         1 => unsafe {
                                             // server selected
@@ -383,28 +340,31 @@ impl UIThread {
                                         _ => unreachable!(),
                                     };
 
-                                self.tx.send(UIEvent::Connect(server)).unwrap();
+                                self.tx.send(Action::Connect { server_id }).unwrap();
                                 if let Some(room_id) = maybe_room_id {
-                                    self.tx.send(UIEvent::JoinRoom(room_id)).unwrap();
+                                    self.tx.send(Action::JoinRoom(room_id)).unwrap();
                                 }
                             }
+                        }
+                        ConnectionDlgEvent::BtnNewRoom => {
+                            dispatch!(Action::CreateRoom(RoomOptions {
+                                name: "meow room".into(),
+                            }))
                         }
                         ConnectionDlgEvent::AddServer(_) => todo!(),
                         _ => {}
                     },
 
-                    // handled by main thread
-                    UIEvent::BtnPlay => {}
-                    UIEvent::BtnPause => {}
-                    UIEvent::BtnStop => {}
-                    UIEvent::BtnNext => {}
-                    UIEvent::BtnPrev => {}
+                    // send matching action to main thread
+                    UIEvent::BtnPlay => self.tx.send(Action::Play).unwrap(),
+                    UIEvent::BtnPause => self.tx.send(Action::Pause).unwrap(),
+                    UIEvent::BtnStop => self.tx.send(Action::Stop).unwrap(),
+                    UIEvent::BtnNext => self.tx.send(Action::Next).unwrap(),
+                    UIEvent::BtnPrev => self.tx.send(Action::Prev).unwrap(),
 
                     UIEvent::BtnOpenConnectionDialog => {
                         self.connection_gui.main_win.show();
-                        self.tx
-                            .send(UIEvent::ConnectionDlg(ConnectionDlgEvent::BtnRefresh))
-                            .unwrap();
+                        dispatch!(Action::RefreshServerStatuses);
                         edges_state
                             .blocking_write()
                             .update_window(WindowId::Connection, &mut self.connection_gui.main_win);
@@ -432,17 +392,20 @@ impl UIThread {
                         self.prefs_gui.main_win.show();
                     }
                     UIEvent::SavePreferences => {
-                        let mut s = self.state.blocking_write();
                         let items = &self.prefs_gui.items;
 
-                        s.preferences.name = PrefItems::val_str(&items.fld_name);
-                        s.preferences.lyrics_show_warning_arrows =
+                        let name = PrefItems::val_str(&items.fld_name);
+                        let lyrics_show_warning_arrows =
                             PrefItems::val_bool(&items.cb_warning_arrows);
-                        s.preferences.display_album_artist =
-                            PrefItems::val_bool(&items.cb_album_artist);
+                        let display_album_artist = PrefItems::val_bool(&items.cb_album_artist);
 
-                        s.preferences.volume = s.volume;
-                        s.preferences.save();
+                        dispatch_update!(StateUpdate::SetPreferences {
+                            name,
+                            lyrics_show_warning_arrows,
+                            display_album_artist,
+                        });
+                        dispatch!(Action::SavePreferences);
+
                         self.prefs_gui.main_win.hide();
                     }
                     UIEvent::SwitchPrefsPage(path) => {
@@ -512,29 +475,103 @@ impl UIThread {
                             all_ids.into_iter().find(|x| x.0 == from_id).unwrap();
                         es.update_window(last_id, last_win);
                     }
-                    UIEvent::Quit => break,
-                    _ => {}
+
+                    UIEvent::Periodic => {
+                        if self.gui.lbl_title.waited_long_enough() {
+                            self.gui.lbl_title.nudge(-4);
+                        }
+                        self.lyric_gui.lyric_display.tick();
+                    }
+
+                    UIEvent::Quit => {
+                        self.tx.send(Action::Quit).unwrap();
+                        break;
+                    }
+
+                    // TODO: remove this, see dispatch! macro comment
+                    UIEvent::Action(action) => self.tx.send(action).unwrap(),
                 }
             }
         }
     }
 
-    fn handle_update(&mut self, evt: UIUpdateEvent) {
-        match evt {
-            UIUpdateEvent::Reset => {
-                self.gui.reset();
+    fn handle_state_changes(&mut self, changes: StateChanges) {
+        if changes.is_empty() {
+            return;
+        }
 
-                self.update_status();
+        // TODO: probably depends on  more things
+        if changes
+            & (StateChanges::LoadingCount
+                | StateChanges::Connection
+                | StateChanges::RoomBuffering
+                | StateChanges::RoomElapsed)
+            != StateChanges::empty()
+        {
+            // TODO: must be called before locking state since it also locks state... refactor later
+            self.update_status();
+        }
+
+        let state = self.state.blocking_read();
+
+        if changes.contains(StateChanges::Volume) {
+            let dragging = self.gui.volume_slider_dragging.blocking_lock();
+            if !*dragging {
+                self.gui
+                    .volume_slider
+                    .set_value(state.preferences.volume.into());
             }
-            UIUpdateEvent::SetTime(elapsed, total) => {
-                // TODO: switch between elapsed and remaining on there
-                self.gui.lbl_time.set_label(&min_secs(elapsed));
+        }
 
-                // this goes here because it's the only place we know elapsed time
-                let s = self.state.blocking_read();
-                if let Some(t) = s.current_track() {
+        if changes.contains(StateChanges::Visualizer) {
+            self.gui.visualizer.update_values(state.visualizer);
+        }
+        if changes.contains(StateChanges::Buffer) {
+            self.gui.bitrate_bar.update_buffer_level(state.buffer);
+        }
+
+        if changes.contains(StateChanges::ServerStatuses)
+            || changes.contains(StateChanges::Connection)
+        {
+            let connected_server_id = state.connection.as_ref().map(|c| c.server_id);
+            self.connection_gui.update_list(
+                connected_server_id,
+                &state.preferences.servers,
+                &state.server_statuses,
+            );
+        } else if changes.contains(StateChanges::Connection) {
+            let connected_server_id = state.connection.as_ref().map(|c| c.server_id);
+            self.connection_gui.update_connected(connected_server_id);
+        }
+
+        if changes.contains(StateChanges::RoomElapsed) {
+            if let Some(room) = state.connection.as_ref().and_then(|c| c.room.as_ref()) {
+                // time label
+                // TODO: switch between elapsed and remaining on there
+                self.gui.lbl_time.set_label(&min_secs(room.elapsed));
+
+                // seek bar
+                {
+                    let progress = if let Some(t) = room.current_track() {
+                        if t.metadata.duration == 0.0 {
+                            0.0
+                        } else {
+                            room.elapsed / t.metadata.duration
+                        }
+                    } else {
+                        0.0
+                    };
+
+                    let dragging = self.gui.seek_bar_dragging.blocking_lock();
+                    if !*dragging {
+                        self.gui.seek_bar.set_value(progress as f64);
+                    }
+                }
+
+                // lyrics
+                if let Some(t) = room.current_track() {
                     if let Some(lyrics) = &t.metadata.lyrics {
-                        let current_ms = (elapsed * 1000.0) as usize;
+                        let current_ms = (room.elapsed * 1000.0) as usize;
                         if current_ms == 0 {
                             self.lyric_gui.lyric_display.clear();
                         } else {
@@ -546,7 +583,7 @@ impl UIThread {
                                     break;
                                 } else if current_ms + 800 > *ts
                                     && self.lyric_gui.lyric_display.musicing()
-                                    && s.preferences.lyrics_show_warning_arrows
+                                    && state.preferences.lyrics_show_warning_arrows
                                 {
                                     // flash lyrics about to start
                                     set = true;
@@ -562,149 +599,102 @@ impl UIThread {
                 } else {
                     self.lyric_gui.lyric_display.update("no lyrics", true);
                 }
-
-                let progress = {
-                    if total == 0.0 {
-                        0.0
-                    } else {
-                        elapsed / total
-                    }
-                };
-
-                let dragging = self.gui.seek_bar_dragging.blocking_lock();
-                if !*dragging {
-                    self.gui.seek_bar.set_value(progress as f64);
-                }
-            }
-            UIUpdateEvent::Visualizer(bars) => {
-                self.gui.visualizer.update_values(bars);
-            }
-            UIUpdateEvent::Buffer(val) => {
-                self.gui.bitrate_bar.update_buffer_level(val);
-            }
-            UIUpdateEvent::Bitrate(val) => {
-                self.gui.bitrate_bar.update_bitrate(val);
-            }
-            UIUpdateEvent::Status => {
-                self.update_status();
-            }
-            UIUpdateEvent::Volume(val) => {
-                self.gui.volume_slider.set_value(val.into());
-            }
-            UIUpdateEvent::Periodic => {
-                if self.gui.lbl_title.waited_long_enough() {
-                    self.gui.lbl_title.nudge(-4);
-                }
-                self.lyric_gui.lyric_display.tick();
-            }
-            UIUpdateEvent::UserListChanged => {
-                let s = self.state.blocking_read();
-
-                self.gui.users.clear();
-
-                if let Some(c) = &s.connection {
-                    if let Some(r) = &c.room {
-                        self.gui.users.add(&format!("[{}]", r.name));
-
-                        for (id, name) in r.connected_users.iter() {
-                            let line = if id == &s.my_id {
-                                format!("@b* you ({})", name)
-                            } else {
-                                format!("* {}", name)
-                            };
-                            self.gui.users.add(&line);
-                        }
-                    } else {
-                        self.gui.users.add("no room");
-                    }
-                } else {
-                    // not connected
-                }
-
-                drop(s);
-                self.update_status();
-            }
-            UIUpdateEvent::RoomChanged => {}
-            UIUpdateEvent::QueueChanged => {
-                let s = self.state.blocking_read();
-
-                self.queue_gui.queue_browser.clear();
-
-                if let Some(c) = &s.connection {
-                    if let Some(r) = &c.room {
-                        // TODO: metadata stuff here is TOO LONG AND ANNOYING
-                        if let Some(track) = &r.current_track() {
-                            // also update display
-                            self.gui.lbl_title.set_text(
-                                track
-                                    .metadata
-                                    .title
-                                    .as_ref()
-                                    .unwrap_or(&"[no title]".to_string()),
-                            );
-                            self.gui.lbl_title.zero();
-
-                            self.gui.lbl_artist.set_label(
-                                if s.preferences.display_album_artist {
-                                    track.metadata.album_artist.as_ref()
-                                } else {
-                                    track.metadata.artist.as_ref()
-                                }
-                                .unwrap_or(&"[unknown artist]".to_string()),
-                            );
-
-                            if let Some(art) = &track.metadata.art {
-                                if let Err(err) = match art {
-                                    TrackArt::Jpeg(data) => JpegImage::from_data(data).map(|img| {
-                                        self.gui.art_frame.set_image(Some(img));
-                                        self.gui.art_frame.redraw();
-                                    }),
-                                } {
-                                    eprintln!("failed to load image: {:?}", err);
-                                }
-                            } else {
-                                self.gui.art_frame.set_image(None::<JpegImage>); // hm that's silly
-                                self.gui.art_frame.redraw();
-                            }
-                        }
-
-                        for track in &r.queue {
-                            let name = r.connected_users.get(&track.owner);
-
-                            let bold = if r.current_track == track.id {
-                                "@b"
-                            } else {
-                                ""
-                            };
-
-                            let line = format!(
-                                "{bold}{}\t[{}] {}",
-                                name.unwrap_or(&"?".into()),
-                                min_secs(track.metadata.duration),
-                                track
-                                    .metadata
-                                    .title
-                                    .clone()
-                                    .unwrap_or("[no title]".to_string())
-                            );
-                            self.queue_gui.queue_browser.add(&line);
-                        }
-                    }
-                }
-
-                drop(s);
-                self.update_status();
-            }
-            UIUpdateEvent::UpdateConnectionTree(list) => {
-                self.connection_gui.populate(list);
-            }
-            UIUpdateEvent::UpdateConnectionTreePartial(server) => {
-                self.connection_gui.update_just_one_server(server);
-            }
-            UIUpdateEvent::ConnectionChanged => {
-                self.connection_gui.update_connected();
             }
         }
+
+        if changes.contains(StateChanges::RoomConnectedUsers) {
+            self.gui.users.clear();
+
+            if let Some(connection) = &state.connection {
+                if let Some(room) = &connection.room {
+                    self.gui.users.add(&format!("[{}]", room.name));
+
+                    for (id, name) in room.connected_users.iter() {
+                        let line = if id == &state.my_id {
+                            format!("@b* you ({})", name)
+                        } else {
+                            format!("* {}", name)
+                        };
+                        self.gui.users.add(&line);
+                    }
+                } else {
+                    self.gui.users.add("no room");
+                }
+            } else {
+                // not connected
+            }
+        }
+
+        if changes.contains(StateChanges::RoomQueue) {
+            self.queue_gui.queue_browser.clear();
+
+            if let Some(connection) = &state.connection {
+                if let Some(room) = &connection.room {
+                    // TODO: metadata stuff here is TOO LONG AND ANNOYING
+                    if let Some(track) = &room.current_track() {
+                        // also update display
+                        self.gui.lbl_title.set_text(
+                            track
+                                .metadata
+                                .title
+                                .as_ref()
+                                .unwrap_or(&"[no title]".to_string()),
+                        );
+                        self.gui.lbl_title.zero();
+
+                        self.gui.lbl_artist.set_label(
+                            if state.preferences.display_album_artist {
+                                track.metadata.album_artist.as_ref()
+                            } else {
+                                track.metadata.artist.as_ref()
+                            }
+                            .unwrap_or(&"[unknown artist]".to_string()),
+                        );
+
+                        if let Some(art) = &track.metadata.art {
+                            if let Err(err) = match art {
+                                TrackArt::Jpeg(data) => JpegImage::from_data(data).map(|img| {
+                                    self.gui.art_frame.set_image(Some(img));
+                                    self.gui.art_frame.redraw();
+                                }),
+                            } {
+                                eprintln!("failed to load image: {:?}", err);
+                            }
+                        } else {
+                            self.gui.art_frame.set_image(None::<JpegImage>); // hm that's silly
+                            self.gui.art_frame.redraw();
+                        }
+                    }
+
+                    for track in &room.queue {
+                        let name = room.connected_users.get(&track.owner);
+
+                        let bold = if room.current_track == track.id {
+                            "@b"
+                        } else {
+                            ""
+                        };
+
+                        let line = format!(
+                            "{bold}{}\t[{}] {}",
+                            name.unwrap_or(&"?".into()),
+                            min_secs(track.metadata.duration),
+                            track
+                                .metadata
+                                .title
+                                .clone()
+                                .unwrap_or("[no title]".to_string())
+                        );
+                        self.queue_gui.queue_browser.add(&line);
+                    }
+                }
+            }
+        }
+
+        // TODO
+        // if changes.contains(StateChanges::Bitrate) {
+        //     self.gui.bitrate_bar.update_bitrate(val);
+        // }
     }
 
     // set status based on state and priorities
@@ -734,6 +724,14 @@ impl UIThread {
                 }
             }
 
+            let server_name = state
+                .preferences
+                .servers
+                .iter()
+                .find(|s| s.id == connection.server_id)
+                .map(|s| s.name.as_ref())
+                .unwrap_or("?");
+
             if let Some(r) = &connection.room {
                 if r.buffering {
                     return "Buffering...".to_string();
@@ -759,10 +757,10 @@ impl UIThread {
                     }
                 }
 
-                return format!("Connected to {}:{}", connection.server.name, r.name);
+                return format!("Connected to {}:{}", server_name, r.name);
             }
 
-            format!("Connected to {}", connection.server.name)
+            format!("Connected to {}", server_name)
         } else {
             "<not connected>".to_string()
         }
@@ -980,7 +978,7 @@ fn handle_window_dnd(_w: &mut DoubleWindow, ev: Event, state: &mut DndState) -> 
         }
         fltk::enums::Event::Paste => {
             if state.dnd && state.released {
-                ui_send!(UIEvent::DroppedFiles(app::event_text()));
+                dispatch!(Action::HandleDroppedFiles(app::event_text()));
                 state.dnd = false;
                 state.released = false;
                 true
@@ -1005,11 +1003,11 @@ fn handle_volume_scroll(_w: &mut DoubleWindow, ev: Event) -> bool {
             match dy {
                 // uhhhhhhhh these are the opposite of what you'd think (???)
                 app::MouseWheel::Up => {
-                    ui_send!(UIEvent::VolumeDown);
+                    dispatch_update!(StateUpdate::VolumeDown);
                     true
                 }
                 app::MouseWheel::Down => {
-                    ui_send!(UIEvent::VolumeUp);
+                    dispatch_update!(StateUpdate::VolumeUp);
                     true
                 }
                 _ => false,

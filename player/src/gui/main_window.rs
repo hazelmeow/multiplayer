@@ -1,3 +1,4 @@
+use crate::state::{dispatch, dispatch_update, Action, StateUpdate};
 use std::sync::Arc;
 
 use fltk::browser::*;
@@ -17,8 +18,8 @@ use super::play_status::*;
 use super::visualizer::*;
 
 use super::add_bar;
+use super::sender;
 use super::UIEvent;
-use super::{sender, ui_send};
 
 pub struct MainWindow {
     pub main_win: Window,
@@ -36,6 +37,7 @@ pub struct MainWindow {
     pub art_frame: Frame,
 
     pub seek_bar_dragging: Arc<Mutex<bool>>,
+    pub volume_slider_dragging: Arc<Mutex<bool>>,
 }
 impl MainWindow {
     pub fn make_window() -> Self {
@@ -104,30 +106,34 @@ impl MainWindow {
         //main_win.add(&temp_input);
 
         let seek_bar_dragging = Arc::new(Mutex::new(false));
-        let seek_bar_dragging2 = seek_bar_dragging.clone();
 
         let mut seek_bar = HorNiceSlider::new(buttons_left, buttons_y - 35, 250, 24, "");
-        seek_bar.handle(move |sb, ev| match ev {
-            fltk::enums::Event::Push => {
-                let mut d = seek_bar_dragging2.blocking_lock();
-                *d = true;
+        seek_bar.handle({
+            let seek_bar_dragging = seek_bar_dragging.clone();
+            move |sb, ev| match ev {
+                fltk::enums::Event::Push => {
+                    let mut d = seek_bar_dragging.blocking_lock();
+                    *d = true;
 
-                true
+                    dispatch!(Action::DragSeekBar(sb.value() as f32));
+
+                    true
+                }
+                fltk::enums::Event::Drag => {
+                    dispatch!(Action::DragSeekBar(sb.value() as f32));
+
+                    true
+                }
+                fltk::enums::Event::Released => {
+                    let mut d = seek_bar_dragging.blocking_lock();
+                    *d = false;
+
+                    dispatch!(Action::Seek(sb.value() as f32));
+
+                    true
+                }
+                _ => false,
             }
-            fltk::enums::Event::Drag => {
-                ui_send!(UIEvent::SeekBarMoved(sb.value() as f32));
-
-                true
-            }
-            fltk::enums::Event::Released => {
-                let mut d = seek_bar_dragging2.blocking_lock();
-                *d = false;
-
-                ui_send!(UIEvent::SeekBarFinished(sb.value() as f32));
-
-                true
-            }
-            _ => false,
         });
         main_win.add(&seek_bar);
 
@@ -197,11 +203,37 @@ impl MainWindow {
 
         // --- end of display ---
 
+        let volume_slider_dragging = Arc::new(Mutex::new(false));
+
         let mut volume_slider = HorSlider::new(110, 70, 80, 13, "");
         volume_slider.set_bounds(0., 1.);
         volume_slider.set_step(0.01, 1);
-        volume_slider.set_callback(move |vs| {
-            ui_send!(UIEvent::VolumeSlider(vs.value() as f32));
+        volume_slider.handle({
+            let volume_slider_dragging = volume_slider_dragging.clone();
+            move |vs: &mut HorSlider, ev| match ev {
+                fltk::enums::Event::Push => {
+                    let mut d = volume_slider_dragging.blocking_lock();
+                    *d = true;
+
+                    dispatch_update!(StateUpdate::SetVolume(vs.value() as f32));
+
+                    true
+                }
+                fltk::enums::Event::Drag => {
+                    dispatch_update!(StateUpdate::SetVolume(vs.value() as f32));
+
+                    true
+                }
+                fltk::enums::Event::Released => {
+                    let mut d = volume_slider_dragging.blocking_lock();
+                    *d = false;
+
+                    dispatch_update!(StateUpdate::SetVolume(vs.value() as f32));
+
+                    true
+                }
+                _ => false,
+            }
         });
         main_win.add(&volume_slider);
 
@@ -253,6 +285,7 @@ impl MainWindow {
             art_frame,
 
             seek_bar_dragging,
+            volume_slider_dragging,
         };
         s.reset();
         s

@@ -1,109 +1,52 @@
+use platform_dirs::AppDirs;
+use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, OpenOptions},
     io::{BufReader, Write},
-    ops::{Deref, DerefMut},
     path::{Path, PathBuf},
 };
-
-use platform_dirs::AppDirs;
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Server {
+    pub id: Uuid,
     pub name: String,
     pub addr: String,
 }
 
-#[inline]
-fn _true() -> bool {
-    true
-}
-
+/// Persisted state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreferencesData {
-    #[serde(default = "default_volume")]
+#[serde(default)]
+pub struct Preferences {
     pub volume: f32,
-    #[serde(default = "default_name")]
-    pub name: String,
-    #[serde(default = "generate_id")]
-    id: String,
 
-    #[serde(default = "_true")]
+    pub name: String,
+
+    // TODO: can you break things by setting your id to someone else's?
+    // maybe id should be based on your generated private key, w/ a challenge from the server during the handshake
+    pub id: Uuid,
+
     pub lyrics_show_warning_arrows: bool,
 
-    #[serde(default)]
     pub display_album_artist: bool,
 
-    #[serde(default = "default_servers")]
     pub servers: Vec<Server>,
-}
-
-const fn default_volume() -> f32 {
-    0.5
-}
-fn default_name() -> String {
-    "anon".into()
-}
-fn generate_id() -> String {
-    Uuid::new_v4().to_string()
-}
-fn default_servers() -> Vec<Server> {
-    vec![Server {
-        name: "local".into(),
-        addr: "127.0.0.1:5119".into(),
-    }]
-}
-
-impl Default for PreferencesData {
-    fn default() -> Self {
-        Self {
-            volume: default_volume(),
-            name: default_name(),
-            id: generate_id(),
-            lyrics_show_warning_arrows: true,
-            display_album_artist: false,
-            servers: default_servers(),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Preferences {
-    inner: PreferencesData,
-
-    // lol
-    path: PathBuf,
-}
-
-impl Deref for Preferences {
-    type Target = PreferencesData;
-
-    fn deref(&self) -> &Self::Target {
-        &self.inner
-    }
-}
-impl DerefMut for Preferences {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.inner
-    }
 }
 
 impl Default for Preferences {
     fn default() -> Self {
-        Preferences {
-            inner: PreferencesData::default(),
-            path: PathBuf::from("./preferences.tmp.json"),
+        Self {
+            volume: 0.5,
+            name: "anon".into(),
+            id: Uuid::new_v4(),
+            lyrics_show_warning_arrows: true,
+            display_album_artist: false,
+            servers: vec![Server {
+                id: Uuid::new_v4(),
+                name: "local".into(),
+                addr: "127.0.0.1:5119".into(),
+            }],
         }
-    }
-}
-
-impl Preferences {
-    pub fn id(&self) -> String {
-        self.inner.id.clone()
-    }
-    pub fn path(&self) -> PathBuf {
-        self.path.clone()
     }
 }
 
@@ -117,49 +60,45 @@ pub fn make_path<P: AsRef<Path>>(filename: P) -> PathBuf {
 }
 
 impl Preferences {
-    pub async fn load() -> Self {
-        let path = make_path("preferences.json");
+    pub fn load(path: impl AsRef<Path>) -> Self {
+        let path = path.as_ref();
 
         if path.exists() {
             let file = OpenOptions::new()
                 .read(true)
-                .open(&path)
+                .open(path)
                 .expect("failed to open preferences file");
             let reader = BufReader::new(&file);
 
-            match serde_json::from_reader::<_, PreferencesData>(reader) {
-                Ok(p) => Preferences { inner: p, path },
+            match serde_json::from_reader::<_, Preferences>(reader) {
+                Ok(p) => p,
                 Err(e) => {
                     // TODO: copy the old file to a backup
 
                     // TODO: tell you somehow
                     println!("failed to read preferences: {:?}", e);
-                    Self::initialize(path).await
+
+                    let prefs = Preferences::default();
+                    prefs.save(path);
+                    prefs
                 }
             }
         } else {
-            Self::initialize(path).await
+            let prefs = Preferences::default();
+            prefs.save(path);
+            prefs
         }
     }
 
-    async fn initialize(path: PathBuf) -> Self {
-        let mut p = Preferences {
-            inner: PreferencesData::default(),
-            path,
-        };
-        p.save();
-        p
-    }
-
-    pub fn save(&mut self) {
-        let json =
-            serde_json::to_string_pretty(&self.inner).expect("failed to serialize preferences");
+    // TODO: better error handling, dont use expect
+    pub fn save(&self, path: impl AsRef<Path>) {
+        let json = serde_json::to_string_pretty(self).expect("failed to serialize preferences");
         OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(true)
-            .open(&self.path)
+            .open(path)
             .expect("failed to open preferences file")
             .write_all(json.as_bytes())
             .expect("failed to write preferences file");

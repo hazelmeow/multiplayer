@@ -1,4 +1,4 @@
-use crate::gui::ui_send;
+use crate::{gui::ui_send, preferences::Preferences};
 use fltk::button::*;
 use fltk::enums::*;
 use fltk::frame::Frame;
@@ -13,7 +13,6 @@ use std::collections::HashMap;
 use super::group_box::GroupBox;
 use super::sender;
 use super::UIEvent;
-use crate::preferences::PreferencesData;
 
 const PAGE_X_OFFSET: i32 = 170;
 
@@ -126,7 +125,7 @@ impl PrefsWindow {
         }
     }
 
-    pub fn load_state(&mut self, p: &PreferencesData) {
+    pub fn load_state(&mut self, p: &Preferences) {
         PrefItems::set_str(&mut self.items.fld_name, &p.name);
         PrefItems::set_bool(
             &mut self.items.cb_warning_arrows,

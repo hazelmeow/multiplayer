@@ -1,16 +1,12 @@
-use std::sync::Arc;
-use std::{fs::read_dir, path::PathBuf};
-
-use futures::future::join_all;
-use tokio::sync::RwLock;
-
-use protocol::TrackRequest;
-
 use crate::{
-    gui::{ui_update, UIUpdateEvent},
+    state::{dispatch_update, StateUpdate},
     transmit::AudioInfoReader,
     State,
 };
+use futures::future::join_all;
+use protocol::TrackRequest;
+use std::{fs::read_dir, path::PathBuf, sync::Arc};
+use tokio::sync::RwLock;
 
 pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<TrackRequest>, usize) {
     let mut frontier: Vec<PathBuf> = data
@@ -24,12 +20,16 @@ pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<TrackR
     while !frontier.is_empty() {
         let path = frontier.pop().unwrap();
 
-        let Ok(metadata) = path.metadata() else { continue };
+        let Ok(metadata) = path.metadata() else {
+            continue;
+        };
 
         if metadata.is_symlink() {
             continue;
         } else if metadata.is_dir() {
-            let Ok(dir_entries) = read_dir(path) else { continue };
+            let Ok(dir_entries) = read_dir(path) else {
+                continue;
+            };
             for entry in dir_entries.flatten() {
                 frontier.push(entry.path());
             }
@@ -46,11 +46,7 @@ pub async fn resolve_dnd(state: Arc<RwLock<State>>, data: String) -> (Vec<TrackR
 
     let num_tracks = track_paths.len();
 
-    {
-        let mut s = state.write().await;
-        s.loading_count += num_tracks;
-        ui_update!(UIUpdateEvent::Status);
-    }
+    dispatch_update!(StateUpdate::IncreaseLoadingCount(num_tracks));
 
     let tasks: Vec<tokio::task::JoinHandle<Option<TrackRequest>>> = {
         let s = state.read().await;

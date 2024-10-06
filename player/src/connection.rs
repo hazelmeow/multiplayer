@@ -1,30 +1,23 @@
-use std::{
-    collections::{HashMap, VecDeque},
-    error::Error,
-    sync::Arc,
-    time::Duration,
+use crate::{
+    audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
+    gui::connection_window::ServerStatus,
+    state::{dispatch, dispatch_update, State, StateUpdate},
+    transmit::{TransmitCommand, TransmitThread},
+    AudioStatus,
 };
-
 use futures::{SinkExt, StreamExt};
+use protocol::{
+    network::{message_stream, MessageStream},
+    Message, Notification, PlaybackCommand, PlaybackState, Request, Response, RoomListing,
+    RoomOptions, TrackRequest,
+};
+use std::{collections::HashMap, error::Error, sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::{mpsc, oneshot, RwLock},
     time::timeout,
 };
-
-use protocol::network::{message_stream, MessageStream};
-use protocol::{
-    Message, Notification, PlaybackCommand, PlaybackState, Request, Response, RoomListing,
-    RoomOptions, TrackRequest,
-};
-
-use crate::{
-    audio::{AudioCommand, AudioStatusRx, AudioThread, AudioThreadHandle},
-    gui::{connection_window::ServerStatus, ui_update, UIUpdateEvent},
-    preferences::Server,
-    transmit::{TransmitCommand, TransmitThread},
-    AudioStatus, ConnectionState, RoomState, State,
-};
+use uuid::Uuid;
 
 #[derive(Debug)]
 pub enum NetworkCommand {
@@ -140,7 +133,7 @@ pub struct ConnectionActor {
 impl ConnectionActor {
     pub async fn spawn(
         state: Arc<RwLock<State>>,
-        server: Server,
+        server_id: Uuid,
     ) -> Result<ConnectionActorHandle, Box<dyn Error>> {
         let (tx, rx) = mpsc::unbounded_channel();
 
@@ -154,7 +147,7 @@ impl ConnectionActor {
         let tx2 = tx.clone();
 
         tokio::spawn(async move {
-            let mut t = ConnectionActor::new(state2, server, audio2, audio_status_rx, tx2, rx)
+            let mut t = ConnectionActor::new(state2, server_id, audio2, audio_status_rx, tx2, rx)
                 .await
                 // TODO
                 .expect("failed to authenticate or something");
@@ -189,16 +182,27 @@ impl ConnectionActor {
 
     pub async fn new(
         state: Arc<RwLock<State>>,
-        server: Server,
+        server_id: Uuid,
         audio: AudioThreadHandle,
         audio_status_rx: AudioStatusRx,
         tx: mpsc::UnboundedSender<NetworkCommand>,
         rx: mpsc::UnboundedReceiver<NetworkCommand>,
     ) -> Result<Self, tokio::io::Error> {
-        let tcp_stream = TcpStream::connect(&server.addr).await?;
+        let addr = {
+            let state = state.read().await;
+            let server = state
+                .preferences
+                .servers
+                .iter()
+                .find(|s| s.id == server_id)
+                .unwrap();
+            server.addr.clone()
+        };
+
+        let tcp_stream = TcpStream::connect(addr).await?;
         let stream = message_stream(tcp_stream);
 
-        state.write().await.connection = Some(ConnectionState { server, room: None });
+        dispatch_update!(StateUpdate::NewConnection { server_id });
 
         Ok(ConnectionActor {
             state,
@@ -271,26 +275,20 @@ impl ConnectionActor {
                 Some(msg) = self.audio_status_rx.recv() => {
                     match msg {
                         AudioStatus::Elapsed(elapsed) => {
-                            let s = self.state.read().await;
-                            let total = s.current_track().expect("weird state").metadata.duration;
-                            ui_update!(UIUpdateEvent::SetTime(elapsed as f32 / 1000.0, total));
+                            dispatch_update!(StateUpdate::SetRoomElapsed(elapsed as f32 / 1000.0));
                         }
-                        AudioStatus::Buffering(is_buffering) => {
-                            let mut s = self.state.write().await;
-                            s.connection.as_mut().unwrap().room.as_mut().unwrap().buffering = is_buffering;
-
-                            ui_update!(UIUpdateEvent::Status);
+                        AudioStatus::Buffering(buffering) => {
+                            dispatch_update!(StateUpdate::SetRoomBuffering(buffering));
                         }
                         AudioStatus::Finished => {
-                            ui_update!(UIUpdateEvent::SetTime(0.0, 0.0));
-
-                            ui_update!(UIUpdateEvent::Status);
+                            // TODO: do we need to do more than this on Finished?
+                            dispatch_update!(StateUpdate::SetRoomElapsed(0.0));
                         }
                         AudioStatus::Visualizer(bars) => {
-                            ui_update!(UIUpdateEvent::Visualizer(bars))
+                            dispatch_update!(StateUpdate::SetVisualizer(bars));
                         }
                         AudioStatus::Buffer(val) => {
-                            ui_update!(UIUpdateEvent::Buffer(val))
+                            dispatch_update!(StateUpdate::SetBufferLevel(val));
                         }
                     }
                 },
@@ -330,7 +328,7 @@ impl ConnectionActor {
 
             Message::PlaybackCommand(command) => match command {
                 PlaybackCommand::Stop | PlaybackCommand::Next | PlaybackCommand::Prev => {
-                    let state = self.state.write().await;
+                    let state = self.state.read().await;
                     let room = state.connection.as_ref().unwrap().room.as_ref().unwrap();
 
                     if let Some(transmit) = &room.transmit_thread {
@@ -343,7 +341,7 @@ impl ConnectionActor {
                 PlaybackCommand::Pause => {}
 
                 PlaybackCommand::SeekTo(secs) => {
-                    let state = self.state.write().await;
+                    let state = self.state.read().await;
                     let room = state.connection.as_ref().unwrap().room.as_ref().unwrap();
 
                     if let Some(transmit) = &room.transmit_thread {
@@ -368,13 +366,14 @@ impl ConnectionActor {
     }
 
     async fn handle_notification(&mut self, notification: Notification) {
+        // TODO: we're writing here to set the transmit thread... not ideal though
         let mut state = self.state.write().await;
 
         // TODO: this is a hack lol
         let my_id = state.my_id.clone();
         let key = state.key.clone();
 
-        let mut conn = state.connection.as_mut().unwrap();
+        let conn = state.connection.as_mut().unwrap();
 
         match notification {
             Notification::Queue {
@@ -382,19 +381,19 @@ impl ConnectionActor {
                 maybe_current_track,
                 maybe_playback_state,
             } => {
-                let mut room = conn
+                let room = conn
                     .room
                     .as_mut()
                     .expect("got notification but we arent in a room o_O"); // lol
 
                 if let Some(queue) = maybe_queue {
-                    room.queue = queue;
+                    dispatch_update!(StateUpdate::SetRoomQueue(queue));
                 }
                 if let Some(current_track) = maybe_current_track {
-                    room.current_track = current_track;
+                    dispatch_update!(StateUpdate::SetRoomCurrentTrack(current_track));
                 }
                 if let Some(playback_state) = maybe_playback_state {
-                    room.playback_state = playback_state;
+                    dispatch_update!(StateUpdate::SetRoomPlaybackState(playback_state));
                 }
 
                 let should_transmit = {
@@ -451,69 +450,32 @@ impl ConnectionActor {
                 self.audio
                     .send(AudioCommand::PlaybackState(room.playback_state))
                     .unwrap();
-
-                ui_update!(UIUpdateEvent::QueueChanged);
-                ui_update!(UIUpdateEvent::Status);
             }
             Notification::ConnectedUsers(list) => {
-                let mut room = conn
-                    .room
-                    .as_mut()
-                    .expect("got notification but we arent in a room o_O");
-                room.connected_users = list;
-
-                ui_update!(UIUpdateEvent::UserListChanged);
+                dispatch_update!(StateUpdate::SetRoomConnectedUsers(list));
             }
-            Notification::Room(maybe_room) => {
-                match maybe_room {
-                    Some(room) => {
-                        conn.room = Some(RoomState {
-                            id: room.id,
-                            name: room.name,
-                            queue: VecDeque::new(),
-                            current_track: 0,
-                            playback_state: PlaybackState::Stopped,
-                            connected_users: HashMap::new(),
-                            buffering: false,
-                            transmit_thread: None,
-                        })
-                    }
-                    None => {
-                        conn.room = None;
-                    }
+            Notification::Room(maybe_room) => match maybe_room {
+                Some(room) => {
+                    dispatch_update!(StateUpdate::NewRoom(room));
                 }
-
-                ui_update!(UIUpdateEvent::RoomChanged);
-                ui_update!(UIUpdateEvent::QueueChanged);
-                ui_update!(UIUpdateEvent::UserListChanged);
-                ui_update!(UIUpdateEvent::Status);
-            }
-            Notification::RoomList(list) => {
-                // TODO: we should probably do the server status state differently
-                let s: ServerStatus = crate::gui::connection_window::ServerStatus {
-                    inner: conn.server.clone(),
-                    rooms: Some(list),
-                    tried: true,
-                };
-                ui_update!(UIUpdateEvent::UpdateConnectionTreePartial(s));
+                None => {
+                    dispatch_update!(StateUpdate::ClearRoom);
+                }
+            },
+            Notification::RoomList(rooms) => {
+                let status = ServerStatus::Success { rooms };
+                dispatch_update!(StateUpdate::SetConnectedServerStatus(status));
             }
         }
     }
 }
 
-pub async fn query_server(server: Server) -> ServerStatus {
-    if let Ok(rooms) = query_room_list(&server.addr).await {
-        ServerStatus {
-            inner: server,
-            rooms: Some(rooms),
-            tried: true,
-        }
+pub async fn query_server(addr: &str) -> ServerStatus {
+    if let Ok(rooms) = query_room_list(addr).await {
+        ServerStatus::Success { rooms }
     } else {
-        ServerStatus {
-            inner: server,
-            rooms: None,
-            tried: true,
-        }
+        // TODO: expose the error
+        ServerStatus::Error
     }
 }
 
