@@ -11,7 +11,9 @@ use fltk::prelude::*;
 use fltk::widget_extends;
 use fltk::window::*;
 
+#[cfg(target_os = "windows")]
 use winapi::shared::windef::HWND;
+#[cfg(target_os = "windows")]
 use winapi::um::winuser::SetActiveWindow;
 
 pub struct ContextMenu {
@@ -125,12 +127,15 @@ impl ContextMenu {
         self.content = None;
     }
 
+    #[cfg(target_os = "windows")]
     unsafe fn windows_focus_hack(w: &DoubleWindow) {
         // yay i know we all love these things
         // needs to be run when the window is shown
         let hwnd = w.raw_handle() as HWND;
         SetActiveWindow(hwnd);
     }
+    #[cfg(not(target_os = "windows"))]
+    unsafe fn windows_focus_hack(_w: &DoubleWindow) {}
 }
 
 pub struct ContextMenuContent {
